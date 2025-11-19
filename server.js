@@ -264,7 +264,10 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+<<<<<<< HEAD
 // 🔐 Аутентификация - РАБОЧАЯ ВЕРСИЯ
+=======
+>>>>>>> 33f563d3987717000da2fa47f8afdd64f1e91c21
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, display_name } = req.body;
