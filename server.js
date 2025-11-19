@@ -257,7 +257,7 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-aapp.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, display_name } = req.body;
     
