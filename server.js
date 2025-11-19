@@ -215,49 +215,57 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username } = req.body;
     
     console.log('🔐 Попытка входа:', { username });
-    
-    // Проверка обязательных полей
+
     if (!username) {
       return res.status(400).json({ 
+        success: false,
         error: 'Username is required' 
       });
     }
 
+    console.log('🔍 Ищем пользователя в базе...');
     const result = await pool.query(
       'SELECT * FROM users WHERE username = $1',
       [username]
     );
     
     if (result.rows.length === 0) {
+      console.log('❌ Пользователь не найден:', username);
       return res.status(401).json({ 
+        success: false,
         error: 'User not found' 
       });
     }
     
     const user = result.rows[0];
+    console.log('✅ Пользователь найден:', user.username);
     
+    // Обновляем статус
     await pool.query(
       'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
       ['online', Date.now(), user.user_id]
     );
     
-    console.log('✅ Успешный вход:', user.username);
     res.json({
       success: true,
+      message: 'Login successful',
       user: user
     });
+    
   } catch (error) {
     console.error('❌ Ошибка входа:', error);
     res.status(500).json({ 
-      error: 'Internal server error: ' + error.message 
+      success: false,
+      error: 'Login failed: ' + error.message 
     });
   }
 });
 
-aapp.post('/api/auth/register', async (req, res) => {
+// 🔐 Аутентификация - РАБОЧАЯ ВЕРСИЯ
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, display_name } = req.body;
     
@@ -266,35 +274,42 @@ aapp.post('/api/auth/register', async (req, res) => {
     // Проверка обязательных полей
     if (!username || !display_name) {
       return res.status(400).json({ 
+        success: false,
         error: 'Missing required fields: username, display_name' 
       });
     }
 
     const userId = 'user_' + Date.now();
     
+    console.log('💾 Сохраняем в базу...');
     const result = await pool.query(
-      `INSERT INTO users (user_id, username, email, display_name, status) 
-       VALUES ($1, $2, $3, $4, 'online') RETURNING *`,
-      [userId, username, email, display_name]
+      `INSERT INTO users (user_id, username, email, display_name, status, last_seen) 
+       VALUES ($1, $2, $3, $4, 'online', $5) RETURNING *`,
+      [userId, username, email, display_name, Date.now()]
     );
     
-    console.log('✅ Пользователь создан:', result.rows[0].username);
+    const user = result.rows[0];
+    console.log('✅ Пользователь создан в БД:', user.username);
+    
     res.json({
       success: true,
-      user: result.rows[0]
+      message: 'User registered successfully',
+      user: user
     });
+    
   } catch (error) {
     console.error('❌ Ошибка регистрации:', error);
     
-    // Если пользователь уже существует
-    if (error.code === '23505') {
+    if (error.code === '23505') { // duplicate key
       return res.status(400).json({ 
+        success: false,
         error: 'Username already exists' 
       });
     }
     
     res.status(500).json({ 
-      error: 'Internal server error: ' + error.message 
+      success: false,
+      error: 'Registration failed: ' + error.message 
     });
   }
 });
