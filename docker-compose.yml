@@ -1,0 +1,73 @@
+services:
+  # PostgreSQL база данных
+  postgres:
+    image: postgres:15
+    container_name: messenger_postgres
+    environment:
+      POSTGRES_DB: messenger
+      POSTGRES_USER: messenger_user
+      POSTGRES_PASSWORD: messenger_password123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql  # ← ДОБАВЛЕНО
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U messenger_user -d messenger"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis для кэша
+  redis:
+    image: redis:7-alpine
+    container_name: messenger_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Node.js бэкенд (УЛУЧШЕННАЯ версия)
+  backend:
+    image: node:18-alpine
+    container_name: messenger_backend
+    ports:
+      - "3000:3000"
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    # УЛУЧШЕННАЯ команда: ждем готовности БД и Redis
+    command: >
+      sh -c "
+        echo '🕐 Ожидаем запуск PostgreSQL...' &&
+        until nc -z postgres 5432; do sleep 2; done &&
+        echo '🕐 Ожидаем запуск Redis...' &&
+        until nc -z redis 6379; do sleep 2; done &&
+        echo '📦 Устанавливаем зависимости...' &&
+        npm install &&
+        echo '🚀 Запускаем сервер...' &&
+        node server.js
+      "
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=messenger
+      - DB_USER=messenger_user
+      - DB_PASSWORD=messenger_password123
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - NODE_ENV=development
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
