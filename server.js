@@ -14,7 +14,7 @@ const io = new Server(server, {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
