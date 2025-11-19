@@ -1,6 +1,5 @@
 const express = require('express');
 const { Pool } = require('pg');
-const redis = require('redis');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
@@ -15,7 +14,7 @@ const io = new Server(server, {
   }
 });
 
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
@@ -39,23 +38,55 @@ app.use((req, res, next) => {
 
 // Подключение к PostgreSQL
 const pool = new Pool({
-  user: 'messenger_user',
-  host: 'postgres',
-  database: 'messenger',
-  password: 'messenger_password123',
-  port: 5432,
-});
-
-// Подключение к Redis
-const redisClient = redis.createClient({
-  socket: {
-    host: 'redis',
-    port: 6379
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
   }
 });
 
-// Подключаем Redis
-redisClient.connect().catch(console.error);
+// Функция инициализации базы
+async function initializeDatabase() {
+  try {
+    console.log('🔄 Initializing database...');
+    
+    // Создаем таблицы если их нет
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT,
+        display_name TEXT NOT NULL,
+        status TEXT DEFAULT 'offline',
+        last_seen BIGINT
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'private',
+        timestamp BIGINT
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        timestamp BIGINT,
+        type TEXT DEFAULT 'text'
+      )
+    `);
+    
+    console.log('✅ Database tables created/verified');
+  } catch (error) {
+    console.error('❌ Database initialization error:', error);
+  }
+}
 
 // Хранилище подключенных пользователей
 const connectedUsers = new Map();
@@ -150,6 +181,15 @@ app.get('/', (req, res) => {
     message: 'Messenger Backend работает! 🚀',
     timestamp: new Date().toISOString(),
     connectedUsers: connectedUsers.size
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Backend is running!',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
@@ -428,12 +468,13 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
+initializeDatabase()
+
 // Запуск сервера
 server.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Messenger backend running on port ${port}`);
   console.log(`🔗 WebSocket server ready`);
   console.log(`📊 Database: PostgreSQL`);
-  console.log(`🔴 Cache: Redis`);
   console.log(`🔐 Auth endpoints: /api/auth/login, /api/auth/register`);
   console.log(`💬 Chat endpoints: /api/chats, /api/messages, /api/messages/send`);
   console.log(`👥 Group endpoints: /api/groups, /api/groups/:id`);
