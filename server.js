@@ -14,7 +14,7 @@ const io = new Server(server, {
   }
 });
 
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 10000;
 
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
@@ -82,6 +82,26 @@ async function initializeDatabase() {
       )
     `);
     
+    // Создаем таблицы для групп
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS groups (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_by TEXT NOT NULL,
+        created_at BIGINT
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS group_members (
+        group_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        role TEXT DEFAULT 'member',
+        PRIMARY KEY (group_id, user_id)
+      )
+    `);
+    
     console.log('✅ Database tables created/verified');
   } catch (error) {
     console.error('❌ Database initialization error:', error);
@@ -111,7 +131,7 @@ io.on('connection', (socket) => {
   });
 
   // Отправка сообщения через WebSocket
-socket.on('send_message', async (messageData) => {
+  socket.on('send_message', async (messageData) => {
     try {
         console.log('💬 WebSocket сообщение получено:', messageData);
         
@@ -139,7 +159,7 @@ socket.on('send_message', async (messageData) => {
         console.error('❌ Ошибка отправки сообщения:', error);
         socket.emit('message_error', { error: 'Failed to send message' });
     }
-});
+  });
 
   // Присоединение к комнате чата
   socket.on('join_chat', (chatId) => {
@@ -193,41 +213,64 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 🔐 Аутентификация
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
     console.log('🔐 Попытка входа:', { username });
     
+    // Проверка обязательных полей
+    if (!username) {
+      return res.status(400).json({ 
+        error: 'Username is required' 
+      });
+    }
+
     const result = await pool.query(
       'SELECT * FROM users WHERE username = $1',
       [username]
     );
     
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: 'User not found' });
+      return res.status(401).json({ 
+        error: 'User not found' 
+      });
     }
+    
+    const user = result.rows[0];
     
     await pool.query(
       'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-      ['online', Date.now(), result.rows[0].user_id]
+      ['online', Date.now(), user.user_id]
     );
     
-    console.log('✅ Успешный вход:', result.rows[0].username);
-    res.json(result.rows[0]);
+    console.log('✅ Успешный вход:', user.username);
+    res.json({
+      success: true,
+      user: user
+    });
   } catch (error) {
     console.error('❌ Ошибка входа:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      error: 'Internal server error: ' + error.message 
+    });
   }
 });
 
-app.post('/api/auth/register', async (req, res) => {
+aapp.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, display_name } = req.body;
-    const userId = 'user_' + Date.now();
     
     console.log('👤 Регистрация:', { username, email, display_name });
+
+    // Проверка обязательных полей
+    if (!username || !display_name) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: username, display_name' 
+      });
+    }
+
+    const userId = 'user_' + Date.now();
     
     const result = await pool.query(
       `INSERT INTO users (user_id, username, email, display_name, status) 
@@ -236,10 +279,23 @@ app.post('/api/auth/register', async (req, res) => {
     );
     
     console.log('✅ Пользователь создан:', result.rows[0].username);
-    res.json(result.rows[0]);
+    res.json({
+      success: true,
+      user: result.rows[0]
+    });
   } catch (error) {
     console.error('❌ Ошибка регистрации:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    
+    // Если пользователь уже существует
+    if (error.code === '23505') {
+      return res.status(400).json({ 
+        error: 'Username already exists' 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Internal server error: ' + error.message 
+    });
   }
 });
 
@@ -468,7 +524,8 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
-initializeDatabase()
+// Инициализируем базу при запуске
+initializeDatabase();
 
 // Запуск сервера
 server.listen(port, '0.0.0.0', () => {
