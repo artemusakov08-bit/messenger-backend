@@ -316,13 +316,42 @@ app.post('/api/auth/register', async (req, res) => {
 
 // 👥 Пользователи
 app.get('/api/users', async (req, res) => {
+  console.log('📨 GET /api/users - Request received');
+  
   try {
+    console.log('🔍 Querying database...');
     const result = await pool.query('SELECT * FROM users');
-    console.log(`✅ Получено пользователей: ${result.rows.length}`);
-    res.json(result.rows);
+    console.log(`✅ Found ${result.rows.length} users`);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      users: result.rows
+    });
+    
   } catch (error) {
-    console.error('❌ Ошибка получения пользователей:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('❌ Database error in /api/users:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Database error: ' + error.message
+    });
+  }
+});
+
+app.get('/api/test-db', async (req, res) => {
+  try {
+    console.log('🔧 Testing database connection...');
+    const result = await pool.query('SELECT NOW() as time');
+    res.json({ 
+      success: true, 
+      message: 'Database connected',
+      time: result.rows[0].time 
+    });
+  } catch (error) {
+    res.json({ 
+      success: false, 
+      error: 'Database error: ' + error.message 
+    });
   }
 });
 
