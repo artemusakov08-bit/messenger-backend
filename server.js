@@ -44,6 +44,14 @@ const pool = new Pool({
   }
 });
 
+pool.on('error', (err) => {
+  console.error('❌ Database connection error:', err);
+});
+
+pool.on('connect', () => {
+  console.log('✅ Database connected successfully');
+});
+
 // Функция инициализации базы
 async function initializeDatabase() {
   try {
