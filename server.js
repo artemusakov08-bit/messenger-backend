@@ -203,29 +203,13 @@ io.on('connection', (socket) => {
   });
 });
 
-// Простейший тестовый эндпоинт
-app.get('/api/test', (req, res) => {
-  console.log('✅ /api/test request received');
-  res.json({ message: 'Test endpoint works!', timestamp: new Date().toISOString() });
-});
-
-app.get('/api/simple-users', (req, res) => {
-  console.log('✅ /api/simple-users request received');
+// 🔥 СУПЕР-ТЕСТОВЫЙ ЭНДПОИНТ
+app.get('/api/super-test', (req, res) => {
+  console.log('🔥 SUPER TEST ENDPOINT HIT!');
   res.json({ 
-    success: true, 
-    users: [
-      { id: 1, name: 'Test User 1' },
-      { id: 2, name: 'Test User 2' }
-    ] 
-  });
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Backend is running!',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'development'
+    success: true,
+    message: 'SUPER TEST WORKS! 🎉',
+    timestamp: new Date().toISOString()
   });
 });
 
