@@ -12,7 +12,6 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "pg": "^8.11.3",
-    "redis": "^4.6.7",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
