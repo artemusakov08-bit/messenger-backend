@@ -203,12 +203,20 @@ io.on('connection', (socket) => {
   });
 });
 
-// Простой тестовый маршрут
-app.get('/', (req, res) => {
+// Простейший тестовый эндпоинт
+app.get('/api/test', (req, res) => {
+  console.log('✅ /api/test request received');
+  res.json({ message: 'Test endpoint works!', timestamp: new Date().toISOString() });
+});
+
+app.get('/api/simple-users', (req, res) => {
+  console.log('✅ /api/simple-users request received');
   res.json({ 
-    message: 'Messenger Backend работает! 🚀',
-    timestamp: new Date().toISOString(),
-    connectedUsers: connectedUsers.size
+    success: true, 
+    users: [
+      { id: 1, name: 'Test User 1' },
+      { id: 2, name: 'Test User 2' }
+    ] 
   });
 });
 
