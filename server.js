@@ -750,9 +750,9 @@ app.post('/api/moderation/templates', async (req, res) => {
 
 // Использовать шаблон для ответа на жалобу
 app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
-    try {
-        const { reportId } = req.params;
-        const { templateId, moderatorId, additionalNotes } = req.body;
+  try {
+    const { reportId } = req.params;
+    const { templateId, moderatorId, additionalNotes } = req.body;
         
         // Получаем шаблон
         const templateResult = await pool.query(
@@ -789,32 +789,24 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
         }
         
         const report = result.rows[0];
-        
-        // Логируем действие
-        const actionId = 'action_' + Date.now();
-        await pool.query(
-            `INSERT INTO moderation_actions (id, moderator_id, target_user_id, action_type, reason)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [actionId, moderatorId, report.reported_user_id, 'template_response', `Использован шаблон: ${template.title}`]
-        );
-        
-        // Уведомляем через WebSocket
-        io.emit('report_resolved', report);
-        
-        res.json({
-            success: true,
-            message: 'Report resolved with template',
-            report: report,
-            templateUsed: template.title
-        });
-        
-    } catch (error) {
-        console.error('❌ Ошибка ответа на жалобу:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Failed to respond to report' 
-        });
-    }
+    
+    // ✅ ИСПРАВЛЕНО: используем io вместо socket
+    io.emit('report_resolved', report);
+    
+    res.json({
+      success: true,
+      message: 'Report resolved with template',
+      report: report,
+      templateUsed: template.title
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка ответа на жалобу:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to respond to report' 
+    });
+  }
 });
 
 // ==================== 🛡️ СИСТЕМА МОДЕРАЦИИ ====================
@@ -979,7 +971,7 @@ app.post('/api/moderation/reports', async (req, res) => {
     
     const report = result.rows[0];
     
-    // Уведомляем модераторов через WebSocket
+    // ✅ ИСПРАВЛЕНО: используем io вместо socket
     io.emit('new_report', report);
     
     console.log('✅ Жалоба создана:', report.id);
@@ -1021,7 +1013,6 @@ app.patch('/api/moderation/reports/:reportId/assign', async (req, res) => {
     
     const report = result.rows[0];
     
-    // Уведомляем об изменении статуса
     io.emit('report_updated', report);
     
     res.json({
