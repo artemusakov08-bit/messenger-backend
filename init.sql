@@ -79,6 +79,75 @@ CREATE TABLE IF NOT EXISTS poll_votes (
     PRIMARY KEY (poll_id, user_id)
 );
 
+-- 🆕 ТАБЛИЦЫ ДЛЯ МОДЕРАЦИИ
+
+-- Роли пользователей
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_expires BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0;
+
+-- Жалобы
+CREATE TABLE IF NOT EXISTS reports (
+    id VARCHAR(50) PRIMARY KEY,
+    reporter_id VARCHAR(50) REFERENCES users(user_id),
+    reported_user_id VARCHAR(50) REFERENCES users(user_id),
+    reported_message_id VARCHAR(50),
+    reason TEXT NOT NULL,
+    priority VARCHAR(20) DEFAULT 'medium',
+    status VARCHAR(20) DEFAULT 'pending',
+    assigned_moderator_id VARCHAR(50) REFERENCES users(user_id),
+    is_premium BOOLEAN DEFAULT false,
+    escalation_level INTEGER DEFAULT 0,
+    resolution TEXT,
+    resolved_at BIGINT,
+    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+);
+
+-- Действия модерации
+CREATE TABLE IF NOT EXISTS moderation_actions (
+    id VARCHAR(50) PRIMARY KEY,
+    moderator_id VARCHAR(50) REFERENCES users(user_id),
+    target_user_id VARCHAR(50) REFERENCES users(user_id),
+    action_type VARCHAR(50) NOT NULL,
+    reason TEXT,
+    duration BIGINT, -- для временных банов
+    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+);
+
+-- Шаблонные ответы
+CREATE TABLE IF NOT EXISTS template_responses (
+    id VARCHAR(50) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    category VARCHAR(50),
+    created_by VARCHAR(50) REFERENCES users(user_id),
+    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+);
+
+-- Аудит действий
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id VARCHAR(50) PRIMARY KEY,
+    user_id VARCHAR(50) REFERENCES users(user_id),
+    action VARCHAR(255) NOT NULL,
+    target_type VARCHAR(50),
+    target_id VARCHAR(50),
+    details JSONB,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+);
+
+-- 🔧 ОБНОВЛЯЕМ существующих пользователей с ролями
+UPDATE users SET role = 'user' WHERE role IS NULL;
+
+-- 🆕 Добавляем тестовых модераторов
+INSERT INTO users (user_id, username, email, display_name, status, role) VALUES 
+('moderator_1', 'moderator', 'moderator@test.com', 'Модератор', 'online', 'moderator'),
+('admin_1', 'admin', 'admin@test.com', 'Администратор', 'online', 'admin'),
+('lead_1', 'lead', 'lead@test.com', 'Руководитель', 'online', 'lead');
+
 -- Создаем тестовые данные
 INSERT INTO users (user_id, username, email, display_name, status) VALUES 
 ('user_1', 'test', 'test@test.com', 'Тестовый пользователь', 'online'),

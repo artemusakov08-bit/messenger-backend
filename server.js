@@ -123,6 +123,51 @@ const connectedUsers = new Map();
 io.on('connection', (socket) => {
   console.log('🔗 Пользователь подключился:', socket.id);
 
+// Модератор присоединяется к очереди
+    socket.on('join_moderation_queue', (userData) => {
+        const { userId, role } = userData;
+        
+        if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+            socket.join('moderation_queue');
+            console.log(`👮 Модератор ${userId} присоединился к очереди`);
+            
+            socket.emit('queue_joined', {
+                message: 'Joined moderation queue',
+                queue: 'moderation'
+            });
+            
+            // Отправляем текущую статистику
+            pool.query(`
+                SELECT COUNT(*) as pending_count 
+                FROM reports 
+                WHERE status = 'pending'
+            `).then(result => {
+                socket.emit('queue_stats', {
+                    pendingReports: parseInt(result.rows[0].pending_count)
+                });
+            });
+        }
+    });
+    
+    // Модератор покидает очередь
+    socket.on('leave_moderation_queue', (userId) => {
+        socket.leave('moderation_queue');
+        console.log(`👮 Модератор ${userId} покинул очередь`);
+    });
+    
+    // Подписка на уведомления о новых жалобах
+    socket.on('subscribe_reports', (userData) => {
+        const { userId, role } = userData;
+        
+        if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+            socket.join('report_notifications');
+            console.log(`🔔 Пользователь ${userId} подписался на уведомления о жалобах`);
+        }
+    });
+});
+
+console.log('🛡️  Moderation system initialized');
+
   // Регистрация пользователя
   socket.on('user_connected', (userId) => {
     connectedUsers.set(userId, socket.id);
@@ -201,7 +246,6 @@ io.on('connection', (socket) => {
       }
     }
   });
-});
 
 // 🔥 СУПЕР-ТЕСТОВЫЙ ЭНДПОИНТ
 app.get('/api/super-test', (req, res) => {
@@ -492,6 +536,559 @@ app.post('/api/messages/send', async (req, res) => {
   } catch (error) {
     console.error('❌ Ошибка отправки сообщения через /send:', error);
     res.status(500).json({ error: 'Internal server error: ' + error.message });
+  }
+});
+
+// ==================== 🤖 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ ====================
+
+// Функция автоматической проверки сообщений
+function autoModerateMessage(text, senderId) {
+    const violations = [];
+    
+    // Запрещенные слова
+    const bannedWords = ['спам', 'мошенничество', 'взлом', 'обман', 'скам'];
+    const foundBannedWords = bannedWords.filter(word => 
+        text.toLowerCase().includes(word)
+    );
+    
+    if (foundBannedWords.length > 0) {
+        violations.push({
+            type: 'banned_words',
+            words: foundBannedWords,
+            severity: 'high'
+        });
+    }
+    
+    // Проверка на спам (повторяющиеся символы/слова)
+    const repeatedChars = /(.)\1{5,}/;
+    const repeatedWords = /\b(\w+)\b.*\b\1\b.*\b\1\b/;
+    
+    if (repeatedChars.test(text) || repeatedWords.test(text)) {
+        violations.push({
+            type: 'spam',
+            severity: 'medium'
+        });
+    }
+    
+    // Проверка на CAPS LOCK
+    const capsRatio = (text.match(/[A-ZА-Я]/g) || []).length / text.length;
+    if (capsRatio > 0.7 && text.length > 10) {
+        violations.push({
+            type: 'excessive_caps',
+            severity: 'low'
+        });
+    }
+    
+    return violations;
+}
+
+// Эндпоинт для проверки сообщения
+app.post('/api/moderation/scan-message', async (req, res) => {
+    try {
+        const { text, senderId } = req.body;
+        
+        console.log('🔍 Сканирование сообщения:', { text, senderId });
+        
+        const violations = autoModerateMessage(text, senderId);
+        const shouldBlock = violations.some(v => v.severity === 'high');
+        
+        res.json({
+            success: true,
+            violations,
+            shouldBlock,
+            action: shouldBlock ? 'block' : 'allow',
+            message: violations.length > 0 ? 'Найдены нарушения' : 'Сообщение чистое'
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка сканирования сообщения:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Scan failed' 
+        });
+    }
+});
+
+// Модифицируем эндпоинт отправки сообщений для автоматической модерации
+app.post('/api/messages', async (req, res) => {
+    console.log('📨 POST /api/messages - Body:', req.body);
+    
+    try {
+        const { 
+            chatId, text, senderId, senderName, 
+            type = 'text'
+        } = req.body;
+
+        console.log('📝 Параметры:', { chatId, text, senderId, senderName });
+
+        // 🔍 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ
+        const violations = autoModerateMessage(text, senderId);
+        const shouldBlock = violations.some(v => v.severity === 'high');
+        
+        if (shouldBlock) {
+            console.log('🚫 Сообщение заблокировано автоматической модерацией:', violations);
+            
+            // Увеличиваем предупреждения пользователю
+            await pool.query(
+                'UPDATE users SET warnings = warnings + 1 WHERE user_id = $1',
+                [senderId]
+            );
+            
+            // Логируем действие модерации
+            const actionId = 'action_' + Date.now();
+            await pool.query(
+                `INSERT INTO moderation_actions (id, moderator_id, target_user_id, action_type, reason)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [actionId, 'auto_moderator', senderId, 'auto_block', 'Запрещенные слова: ' + violations[0].words.join(', ')]
+            );
+            
+            return res.status(403).json({ 
+                success: false,
+                error: 'Сообщение содержит запрещенный контент',
+                violations: violations
+            });
+        }
+
+        // Проверка обязательных полей
+        if (!chatId || !text || !senderId || !senderName) {
+            console.log('❌ Отсутствуют обязательные поля');
+            return res.status(400).json({ 
+                error: 'Missing required fields: chatId, text, senderId, senderName' 
+            });
+        }
+
+        const messageId = 'msg_' + Date.now();
+        
+        console.log('💾 Сохраняем в базу...');
+        
+        const result = await pool.query(
+            `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            [messageId, chatId, text, senderId, senderName, Date.now(), type]
+        );
+
+        const savedMessage = result.rows[0];
+
+        console.log('✅ Сообщение сохранено:', { 
+            id: savedMessage.id, 
+            chatId: savedMessage.chat_id,
+            text: savedMessage.text 
+        });
+
+        // Отправляем сообщение через WebSocket всем подключенным клиентам
+        io.emit('new_message', savedMessage);
+        
+        res.json(savedMessage);
+    } catch (error) {
+        console.error('❌ Ошибка отправки сообщения:', error);
+        res.status(500).json({ error: 'Internal server error: ' + error.message });
+    }
+});
+
+// ==================== 📝 ШАБЛОННЫЕ ОТВЕТЫ ====================
+
+// Получить шаблонные ответы
+app.get('/api/moderation/templates', async (req, res) => {
+    try {
+        const { category } = req.query;
+        
+        let query = 'SELECT * FROM template_responses';
+        let params = [];
+        
+        if (category) {
+            query += ' WHERE category = $1';
+            params.push(category);
+        }
+        
+        query += ' ORDER BY created_at DESC';
+        
+        const result = await pool.query(query, params);
+        
+        res.json({
+            success: true,
+            templates: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения шаблонов:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to get templates' 
+        });
+    }
+});
+
+// Создать шаблонный ответ
+app.post('/api/moderation/templates', async (req, res) => {
+    try {
+        const { title, content, category, createdBy } = req.body;
+        
+        const templateId = 'template_' + Date.now();
+        
+        const result = await pool.query(
+            `INSERT INTO template_responses (id, title, content, category, created_by)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [templateId, title, content, category, createdBy]
+        );
+        
+        console.log('✅ Шаблон создан:', title);
+        
+        res.json({
+            success: true,
+            message: 'Template created successfully',
+            template: result.rows[0]
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка создания шаблона:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to create template' 
+        });
+    }
+});
+
+// Использовать шаблон для ответа на жалобу
+app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
+    try {
+        const { reportId } = req.params;
+        const { templateId, moderatorId, additionalNotes } = req.body;
+        
+        // Получаем шаблон
+        const templateResult = await pool.query(
+            'SELECT * FROM template_responses WHERE id = $1',
+            [templateId]
+        );
+        
+        if (templateResult.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Template not found' 
+            });
+        }
+        
+        const template = templateResult.rows[0];
+        
+        // Обновляем жалобу
+        const resolution = additionalNotes 
+            ? `${template.content}\n\nДополнительно: ${additionalNotes}`
+            : template.content;
+            
+        const result = await pool.query(
+            `UPDATE reports 
+             SET status = 'resolved', resolution = $1, resolved_at = $2, assigned_moderator_id = $3
+             WHERE id = $4 RETURNING *`,
+            [resolution, Date.now(), moderatorId, reportId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Report not found' 
+            });
+        }
+        
+        const report = result.rows[0];
+        
+        // Логируем действие
+        const actionId = 'action_' + Date.now();
+        await pool.query(
+            `INSERT INTO moderation_actions (id, moderator_id, target_user_id, action_type, reason)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [actionId, moderatorId, report.reported_user_id, 'template_response', `Использован шаблон: ${template.title}`]
+        );
+        
+        // Уведомляем через WebSocket
+        io.emit('report_resolved', report);
+        
+        res.json({
+            success: true,
+            message: 'Report resolved with template',
+            report: report,
+            templateUsed: template.title
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка ответа на жалобу:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to respond to report' 
+        });
+    }
+});
+
+// ==================== 🛡️ СИСТЕМА МОДЕРАЦИИ ====================
+
+// 🎯 Многоуровневая аутентификация
+app.post('/api/auth/multi-level-login', async (req, res) => {
+  try {
+    const { username, smsCode, password, secretWord, extraPassword } = req.body;
+    
+    console.log('🔐 Многоуровневая аутентификация:', { username });
+
+    // Находим пользователя
+    const userResult = await pool.query(
+      'SELECT * FROM users WHERE username = $1',
+      [username]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+    
+    const user = userResult.rows[0];
+    
+    // Проверяем уровни аутентификации в зависимости от роли
+    const authRequirements = {
+      'user': ['sms'],
+      'moderator': ['sms', 'password'],
+      'admin': ['sms', 'password', 'secretWord'],
+      'lead': ['sms', 'password', 'secretWord', 'extraPassword'],
+      'super_admin': ['sms', 'password', 'secretWord', 'extraPassword']
+    };
+    
+    const requirements = authRequirements[user.role] || ['sms'];
+    const providedAuth = { sms: !!smsCode };
+    
+    // Проверяем пароль (в реальном приложении - хеширование)
+    if (password) {
+      providedAuth.password = password === 'moderator123'; // временно
+    }
+    
+    if (secretWord) {
+      providedAuth.secretWord = secretWord === 'admin_secret';
+    }
+    
+    if (extraPassword) {
+      providedAuth.extraPassword = extraPassword === 'lead_extra';
+    }
+    
+    // Проверяем выполнены ли все требования
+    const isValid = requirements.every(req => providedAuth[req]);
+    
+    if (!isValid) {
+      return res.status(401).json({ 
+        success: false,
+        error: 'Insufficient authentication levels',
+        required: requirements,
+        provided: Object.keys(providedAuth).filter(k => providedAuth[k])
+      });
+    }
+    
+    // Обновляем статус
+    await pool.query(
+      'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+      ['online', Date.now(), user.user_id]
+    );
+    
+    res.json({
+      success: true,
+      message: 'Multi-level authentication successful',
+      user: {
+        user_id: user.user_id,
+        username: user.username,
+        display_name: user.display_name,
+        role: user.role,
+        auth_level: requirements.length
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка многоуровневой аутентификации:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Authentication failed: ' + error.message 
+    });
+  }
+});
+
+// 📋 Получить очередь жалоб
+app.get('/api/moderation/reports', async (req, res) => {
+  try {
+    const { status = 'pending', limit = 50 } = req.query;
+    
+    const result = await pool.query(
+      `SELECT r.*, 
+              reporter.username as reporter_username,
+              reported.username as reported_username,
+              reporter.is_premium as is_premium
+       FROM reports r
+       LEFT JOIN users reporter ON r.reporter_id = reporter.user_id
+       LEFT JOIN users reported ON r.reported_user_id = reported.user_id
+       WHERE r.status = $1
+       ORDER BY 
+         reporter.is_premium DESC,
+         r.priority DESC,
+         r.created_at ASC
+       LIMIT $2`,
+      [status, parseInt(limit)]
+    );
+    
+    console.log(`✅ Получено жалоб: ${result.rows.length}`);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      reports: result.rows
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения жалоб:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get reports' 
+    });
+  }
+});
+
+// 📨 Отправить жалобу
+app.post('/api/moderation/reports', async (req, res) => {
+  try {
+    const { reporterId, reportedUserId, messageId, reason } = req.body;
+    
+    console.log('🆘 Новая жалоба:', { reporterId, reportedUserId, reason });
+    
+    const reportId = 'report_' + Date.now();
+    
+    // Проверяем премиум статус
+    const reporterResult = await pool.query(
+      'SELECT is_premium FROM users WHERE user_id = $1',
+      [reporterId]
+    );
+    
+    const isPremium = reporterResult.rows[0]?.is_premium || false;
+    
+    // Определяем приоритет
+    let priority = 'medium';
+    if (isPremium) priority = 'high';
+    
+    // Критические ключевые слова
+    const criticalKeywords = ['спам', 'мошенничество', 'угрозы'];
+    if (criticalKeywords.some(word => reason.toLowerCase().includes(word))) {
+      priority = 'critical';
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO reports (id, reporter_id, reported_user_id, reported_message_id, reason, priority, is_premium)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [reportId, reporterId, reportedUserId, messageId, reason, priority, isPremium]
+    );
+    
+    const report = result.rows[0];
+    
+    // Уведомляем модераторов через WebSocket
+    io.emit('new_report', report);
+    
+    console.log('✅ Жалоба создана:', report.id);
+    
+    res.json({
+      success: true,
+      message: 'Report submitted successfully',
+      report: report
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка создания жалобы:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to submit report' 
+    });
+  }
+});
+
+// 👮 Назначить жалобу модератору
+app.patch('/api/moderation/reports/:reportId/assign', async (req, res) => {
+  try {
+    const { reportId } = req.params;
+    const { moderatorId } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE reports 
+       SET status = 'in_progress', assigned_moderator_id = $1
+       WHERE id = $2 RETURNING *`,
+      [moderatorId, reportId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Report not found' 
+      });
+    }
+    
+    const report = result.rows[0];
+    
+    // Уведомляем об изменении статуса
+    io.emit('report_updated', report);
+    
+    res.json({
+      success: true,
+      message: 'Report assigned to moderator',
+      report: report
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка назначения жалобы:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to assign report' 
+    });
+  }
+});
+
+// 📊 Дашборд модерации
+app.get('/api/moderation/dashboard', async (req, res) => {
+  try {
+    const { period = '7d' } = req.query;
+    const startTime = Date.now() - (7 * 24 * 60 * 60 * 1000); // 7 дней
+    
+    const [
+      totalReports,
+      resolvedReports,
+      pendingReports,
+      avgResolutionTime
+    ] = await Promise.all([
+      // Всего жалоб
+      pool.query('SELECT COUNT(*) FROM reports WHERE created_at > $1', [startTime]),
+      // Решенные жалобы
+      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1 AND created_at > $1', ['resolved', startTime]),
+      // Ожидающие жалобы
+      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1', ['pending']),
+      // Среднее время решения
+      pool.query(`
+        SELECT AVG(resolved_at - created_at) as avg_time 
+        FROM reports 
+        WHERE status = 'resolved' AND resolved_at IS NOT NULL
+      `)
+    ]);
+    
+    const stats = {
+      totalReports: parseInt(totalReports.rows[0].count),
+      resolvedReports: parseInt(resolvedReports.rows[0].count),
+      pendingReports: parseInt(pendingReports.rows[0].count),
+      resolutionRate: totalReports.rows[0].count > 0 
+        ? ((resolvedReports.rows[0].count / totalReports.rows[0].count) * 100).toFixed(1)
+        : 0,
+      avgResolutionTime: avgResolutionTime.rows[0].avg_time 
+        ? Math.round(avgResolutionTime.rows[0].avg_time / 60000) // в минуты
+        : 0
+    };
+    
+    res.json({
+      success: true,
+      period: period,
+      stats: stats
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения дашборда:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get dashboard' 
+    });
   }
 });
 

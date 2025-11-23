@@ -1,7 +1,7 @@
 {
   "name": "messenger-backend",
   "version": "1.0.0",
-  "description": "Backend for messenger app",
+  "description": "Backend for messenger app with moderation",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,7 +12,10 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "pg": "^8.11.3",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.8.1",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "helmet": "^7.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
