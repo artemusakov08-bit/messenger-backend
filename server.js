@@ -164,12 +164,9 @@ io.on('connection', (socket) => {
           console.log(`🔔 Пользователь ${userId} подписался на уведомления о жалобах`);
       }
   });
-});
 
-console.log('🛡️  Moderation system initialized');
-
- // Регистрация пользователя
- socket.on('user_connected', (userId) => {
+  // Регистрация пользователя
+  socket.on('user_connected', (userId) => {
     connectedUsers.set(userId, socket.id);
     console.log(`👤 Пользователь ${userId} подключен (socket: ${socket.id})`);
     
@@ -184,7 +181,7 @@ console.log('🛡️  Moderation system initialized');
   });
 
   // Отправка сообщения через WebSocket
-    socket.on('send_message', async (messageData) => {
+  socket.on('send_message', async (messageData) => {
     try {
         console.log('💬 WebSocket сообщение получено:', messageData); 
         
@@ -224,7 +221,7 @@ console.log('🛡️  Moderation system initialized');
     console.log(`👥 Пользователь ${socket.id} покинул чат ${chatId}`);
   });
 
- socket.on('disconnect', () => {
+  socket.on('disconnect', () => {
     // Находим и удаляем пользователя из connectedUsers
     for (let [userId, socketId] of connectedUsers.entries()) {
       if (socketId === socket.id) {
@@ -243,7 +240,7 @@ console.log('🛡️  Moderation system initialized');
       }
     }
   });
-console.log('🛡️  Moderation system initialized');
+}); // ✅ КОНЕЦ WebSocket блока
 
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -597,82 +594,6 @@ app.post('/api/moderation/scan-message', async (req, res) => {
     }
 });
 
-// Модифицируем эндпоинт отправки сообщений для автоматической модерации
-app.post('/api/messages', async (req, res) => {
-    console.log('📨 POST /api/messages - Body:', req.body);
-    
-    try {
-        const { 
-            chatId, text, senderId, senderName, 
-            type = 'text'
-        } = req.body;
-
-        console.log('📝 Параметры:', { chatId, text, senderId, senderName });
-
-        // 🔍 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ
-        const violations = autoModerateMessage(text, senderId);
-        const shouldBlock = violations.some(v => v.severity === 'high');
-        
-        if (shouldBlock) {
-            console.log('🚫 Сообщение заблокировано автоматической модерацией:', violations);
-            
-            // Увеличиваем предупреждения пользователю
-            await pool.query(
-                'UPDATE users SET warnings = warnings + 1 WHERE user_id = $1',
-                [senderId]
-            );
-            
-            // Логируем действие модерации
-            const actionId = 'action_' + Date.now();
-            await pool.query(
-                `INSERT INTO moderation_actions (id, moderator_id, target_user_id, action_type, reason)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [actionId, 'auto_moderator', senderId, 'auto_block', 'Запрещенные слова: ' + violations[0].words.join(', ')]
-            );
-            
-            return res.status(403).json({ 
-                success: false,
-                error: 'Сообщение содержит запрещенный контент',
-                violations: violations
-            });
-        }
-
-        // Проверка обязательных полей
-        if (!chatId || !text || !senderId || !senderName) {
-            console.log('❌ Отсутствуют обязательные поля');
-            return res.status(400).json({ 
-                error: 'Missing required fields: chatId, text, senderId, senderName' 
-            });
-        }
-
-        const messageId = 'msg_' + Date.now();
-        
-        console.log('💾 Сохраняем в базу...');
-        
-        const result = await pool.query(
-            `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-            [messageId, chatId, text, senderId, senderName, Date.now(), type]
-        );
-
-        const savedMessage = result.rows[0];
-
-        console.log('✅ Сообщение сохранено:', { 
-            id: savedMessage.id, 
-            chatId: savedMessage.chat_id,
-            text: savedMessage.text 
-        });
-
-        // Отправляем сообщение через WebSocket всем подключенным клиентам
-        io.emit('new_message', savedMessage);
-        
-        res.json(savedMessage);
-    } catch (error) {
-        console.error('❌ Ошибка отправки сообщения:', error);
-        res.status(500).json({ error: 'Internal server error: ' + error.message });
-    }
-});
-
 // ==================== 📝 ШАБЛОННЫЕ ОТВЕТЫ ====================
 
 // Получить шаблонные ответы
@@ -778,7 +699,6 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
         
         const report = result.rows[0];
     
-    // ✅ ИСПРАВЛЕНО: используем io вместо socket
     io.emit('report_resolved', report);
     
     res.json({
@@ -959,7 +879,6 @@ app.post('/api/moderation/reports', async (req, res) => {
     
     const report = result.rows[0];
     
-    // ✅ ИСПРАВЛЕНО: используем io вместо socket
     io.emit('new_report', report);
     
     console.log('✅ Жалоба создана:', report.id);
