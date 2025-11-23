@@ -123,53 +123,53 @@ const connectedUsers = new Map();
 io.on('connection', (socket) => {
   console.log('🔗 Пользователь подключился:', socket.id);
 
-// Модератор присоединяется к очереди
-    socket.on('join_moderation_queue', (userData) => {
-        const { userId, role } = userData;
-        
-        if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
-            socket.join('moderation_queue');
-            console.log(`👮 Модератор ${userId} присоединился к очереди`);
-            
-            socket.emit('queue_joined', {
-                message: 'Joined moderation queue',
-                queue: 'moderation'
-            });
-            
-            // Отправляем текущую статистику
-            pool.query(`
-                SELECT COUNT(*) as pending_count 
-                FROM reports 
-                WHERE status = 'pending'
-            `).then(result => {
-                socket.emit('queue_stats', {
-                    pendingReports: parseInt(result.rows[0].pending_count)
-                });
-            });
-        }
-    });
+  // Модератор присоединяется к очереди
+  socket.on('join_moderation_queue', (userData) => {
+      const { userId, role } = userData;
+      
+      if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+          socket.join('moderation_queue');
+          console.log(`👮 Модератор ${userId} присоединился к очереди`);
+          
+          socket.emit('queue_joined', {
+              message: 'Joined moderation queue',
+              queue: 'moderation'
+          });
+          
+          // Отправляем текущую статистику
+          pool.query(`
+              SELECT COUNT(*) as pending_count 
+              FROM reports 
+              WHERE status = 'pending'
+          `).then(result => {
+              socket.emit('queue_stats', {
+                  pendingReports: parseInt(result.rows[0].pending_count)
+              });
+          });
+      }
+  });
     
-    // Модератор покидает очередь
-    socket.on('leave_moderation_queue', (userId) => {
-        socket.leave('moderation_queue');
-        console.log(`👮 Модератор ${userId} покинул очередь`);
-    });
-    
-    // Подписка на уведомления о новых жалобах
-    socket.on('subscribe_reports', (userData) => {
-        const { userId, role } = userData;
-        
-        if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
-            socket.join('report_notifications');
-            console.log(`🔔 Пользователь ${userId} подписался на уведомления о жалобах`);
-        }
-    });
+  // Модератор покидает очередь
+  socket.on('leave_moderation_queue', (userId) => {
+      socket.leave('moderation_queue');
+      console.log(`👮 Модератор ${userId} покинул очередь`);
+  });
+  
+  // Подписка на уведомления о новых жалобах
+  socket.on('subscribe_reports', (userData) => {
+      const { userId, role } = userData;
+      
+      if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+          socket.join('report_notifications');
+          console.log(`🔔 Пользователь ${userId} подписался на уведомления о жалобах`);
+      }
+  });
 });
 
 console.log('🛡️  Moderation system initialized');
 
-  // Регистрация пользователя
-  socket.on('user_connected', (userId) => {
+ // Регистрация пользователя
+ socket.on('user_connected', (userId) => {
     connectedUsers.set(userId, socket.id);
     console.log(`👤 Пользователь ${userId} подключен (socket: ${socket.id})`);
     
@@ -184,9 +184,9 @@ console.log('🛡️  Moderation system initialized');
   });
 
   // Отправка сообщения через WebSocket
-  socket.on('send_message', async (messageData) => {
+    socket.on('send_message', async (messageData) => {
     try {
-        console.log('💬 WebSocket сообщение получено:', messageData);
+        console.log('💬 WebSocket сообщение получено:', messageData); 
         
         const { chatId, text, senderId, senderName, type = 'text' } = messageData;
 
@@ -214,20 +214,17 @@ console.log('🛡️  Moderation system initialized');
     }
   });
 
-  // Присоединение к комнате чата
   socket.on('join_chat', (chatId) => {
     socket.join(chatId);
     console.log(`👥 Пользователь ${socket.id} присоединился к чату ${chatId}`);
   });
 
-  // Покидание комнаты чата
   socket.on('leave_chat', (chatId) => {
     socket.leave(chatId);
     console.log(`👥 Пользователь ${socket.id} покинул чат ${chatId}`);
   });
 
-  // Отключение пользователя
-  socket.on('disconnect', () => {
+ socket.on('disconnect', () => {
     // Находим и удаляем пользователя из connectedUsers
     for (let [userId, socketId] of connectedUsers.entries()) {
       if (socketId === socket.id) {
@@ -246,16 +243,7 @@ console.log('🛡️  Moderation system initialized');
       }
     }
   });
-
-// 🔥 СУПЕР-ТЕСТОВЫЙ ЭНДПОИНТ
-app.get('/api/super-test', (req, res) => {
-  console.log('🔥 SUPER TEST ENDPOINT HIT!');
-  res.json({ 
-    success: true,
-    message: 'SUPER TEST WORKS! 🎉',
-    timestamp: new Date().toISOString()
-  });
-});
+console.log('🛡️  Moderation system initialized');
 
 app.post('/api/auth/login', async (req, res) => {
   try {
