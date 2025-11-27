@@ -325,54 +325,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// 🗑️ ЭНДПОИНТ ДЛЯ ПЕРЕСОЗДАНИЯ ТАБЛИЦЫ USERS
-app.post('/api/reset-users-table', async (req, res) => {
-  const client = await db.getClient();
-  try {
-    console.log('🔄 Recreating users table...');
-    
-    // Удаляем таблицу если существует
-    await client.query('DROP TABLE IF EXISTS users CASCADE');
-    console.log('✅ Old users table dropped');
-    
-    // Создаем новую таблицу с правильной структурой
-    await client.query(`
-      CREATE TABLE users (
-        user_id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        email TEXT,
-        display_name TEXT NOT NULL,
-        phone TEXT UNIQUE,
-        password TEXT,
-        status TEXT DEFAULT 'offline',
-        last_seen BIGINT,
-        role VARCHAR(20) DEFAULT 'user',
-        is_premium BOOLEAN DEFAULT false,
-        is_banned BOOLEAN DEFAULT false,
-        ban_expires BIGINT,
-        warnings INTEGER DEFAULT 0,
-        auth_level VARCHAR(50) DEFAULT 'sms_only'
-      )
-    `);
-    
-    console.log('✅ New users table created with correct structure');
-    
-    res.json({
-      success: true,
-      message: 'Users table recreated successfully'
-    });
-    
-  } catch (error) {
-    console.error('❌ Error recreating table:', error);
-    res.status(500).json({ 
-      success: false,
-      error: error.message 
-    });
-  } finally {
-    client.release();
-  }
-});
-
 // 👥 Пользователи
 app.get('/api/users', async (req, res) => {
   console.log('📨 GET /api/users - Request received');
