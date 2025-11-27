@@ -5,6 +5,9 @@ const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
 const http = require('http');
 
+// 🔥 ПОДКЛЮЧАЕМ НОВЫЕ КОНТРОЛЛЕРЫ
+const authRoutes = require('./src/routes/auth');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -36,6 +39,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// 🔥 ПОДКЛЮЧАЕМ РОУТЫ
+app.use('/api/auth', authRoutes);
+
 // Подключение к PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -57,15 +63,23 @@ async function initializeDatabase() {
   try {
     console.log('🔄 Initializing database...');
     
-    // Создаем основные таблицы если их нет
+    // 🔥 ОБНОВЛЕННАЯ ТАБЛИЦА USERS - БЕЗ ОБЯЗАТЕЛЬНЫХ USERNAME/EMAIL
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
-        username TEXT UNIQUE NOT NULL,
+        username TEXT UNIQUE,
         email TEXT,
         display_name TEXT NOT NULL,
+        phone TEXT UNIQUE,
+        password TEXT,
         status TEXT DEFAULT 'offline',
-        last_seen BIGINT
+        last_seen BIGINT,
+        role VARCHAR(20) DEFAULT 'user',
+        is_premium BOOLEAN DEFAULT false,
+        is_banned BOOLEAN DEFAULT false,
+        ban_expires BIGINT,
+        warnings INTEGER DEFAULT 0,
+        auth_level VARCHAR(50) DEFAULT 'sms_only'
       )
     `);
     
@@ -112,18 +126,6 @@ async function initializeDatabase() {
 
     // 🆕 ТАБЛИЦЫ ДЛЯ МОДЕРАЦИИ
     console.log('🔄 Creating moderation tables...');
-    
-    // Добавляем колонки в users
-    try {
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user'`);
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_premium BOOLEAN DEFAULT false`);
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned BOOLEAN DEFAULT false`);
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_expires BIGINT`);
-      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS warnings INTEGER DEFAULT 0`);
-      console.log('✅ User columns added');
-    } catch (error) {
-      console.log('ℹ️  User columns already exist');
-    }
     
     // Таблица жалоб
     await pool.query(`
@@ -183,23 +185,6 @@ async function initializeDatabase() {
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
       )
     `);
-    
-    // Обновляем роли пользователей
-    await pool.query("UPDATE users SET role = 'user' WHERE role IS NULL");
-    
-    // Добавляем тестовых модераторов (если их нет)
-    try {
-      await pool.query(`
-        INSERT INTO users (user_id, username, email, display_name, status, role) VALUES 
-        ('moderator_1', 'moderator', 'moderator@test.com', 'Модератор', 'online', 'moderator'),
-        ('admin_1', 'admin', 'admin@test.com', 'Администратор', 'online', 'admin'),
-        ('lead_1', 'lead', 'lead@test.com', 'Руководитель', 'online', 'lead')
-        ON CONFLICT (username) DO NOTHING
-      `);
-      console.log('✅ Test moderators added');
-    } catch (error) {
-      console.log('ℹ️  Test moderators already exist');
-    }
     
     console.log('✅ All database tables created/verified');
     
@@ -332,107 +317,6 @@ io.on('connection', (socket) => {
       }
     }
   });
-}); // ✅ КОНЕЦ WebSocket блока
-
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { username } = req.body;
-    
-    console.log('🔐 Попытка входа:', { username });
-
-    if (!username) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Username is required' 
-      });
-    }
-
-    console.log('🔍 Ищем пользователя в базе...');
-    const result = await pool.query(
-      'SELECT * FROM users WHERE username = $1',
-      [username]
-    );
-    
-    if (result.rows.length === 0) {
-      console.log('❌ Пользователь не найден:', username);
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-    
-    const user = result.rows[0];
-    console.log('✅ Пользователь найден:', user.username);
-    
-    // Обновляем статус
-    await pool.query(
-      'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-      ['online', Date.now(), user.user_id]
-    );
-    
-    res.json({
-      success: true,
-      message: 'Login successful',
-      user: user
-    });
-    
-  } catch (error) {
-    console.error('❌ Ошибка входа:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Login failed: ' + error.message 
-    });
-  }
-});
-
-// 🔐 Аутентификация - РАБОЧАЯ ВЕРСИЯ
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { username, email, display_name } = req.body;
-    
-    console.log('👤 Регистрация:', { username, email, display_name });
-
-    // Проверка обязательных полей
-    if (!username || !display_name) {
-      return res.status(400).json({ 
-        success: false,
-        error: 'Missing required fields: username, display_name' 
-      });
-    }
-
-    const userId = 'user_' + Date.now();
-    
-    console.log('💾 Сохраняем в базу...');
-    const result = await pool.query(
-      `INSERT INTO users (user_id, username, email, display_name, status, last_seen) 
-       VALUES ($1, $2, $3, $4, 'online', $5) RETURNING *`,
-      [userId, username, email, display_name, Date.now()]
-    );
-    
-    const user = result.rows[0];
-    console.log('✅ Пользователь создан в БД:', user.username);
-    
-    res.json({
-      success: true,
-      message: 'User registered successfully',
-      user: user
-    });
-    
-  } catch (error) {
-    console.error('❌ Ошибка регистрации:', error);
-    
-    if (error.code === '23505') { // duplicate key
-      return res.status(400).json({ 
-        success: false,
-        error: 'Username already exists' 
-      });
-    }
-    
-    res.status(500).json({ 
-      success: false,
-      error: 'Registration failed: ' + error.message 
-    });
-  }
 });
 
 // 👥 Пользователи
@@ -811,92 +695,6 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
 
 // ==================== 🛡️ СИСТЕМА МОДЕРАЦИИ ====================
 
-// 🎯 Многоуровневая аутентификация
-app.post('/api/auth/multi-level-login', async (req, res) => {
-  try {
-    const { username, smsCode, password, secretWord, extraPassword } = req.body;
-    
-    console.log('🔐 Многоуровневая аутентификация:', { username });
-
-    // Находим пользователя
-    const userResult = await pool.query(
-      'SELECT * FROM users WHERE username = $1',
-      [username]
-    );
-    
-    if (userResult.rows.length === 0) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'User not found' 
-      });
-    }
-    
-    const user = userResult.rows[0];
-    
-    // Проверяем уровни аутентификации в зависимости от роли
-    const authRequirements = {
-      'user': ['sms'],
-      'moderator': ['sms', 'password'],
-      'admin': ['sms', 'password', 'secretWord'],
-      'lead': ['sms', 'password', 'secretWord', 'extraPassword'],
-      'super_admin': ['sms', 'password', 'secretWord', 'extraPassword']
-    };
-    
-    const requirements = authRequirements[user.role] || ['sms'];
-    const providedAuth = { sms: !!smsCode };
-    
-    // Проверяем пароль (в реальном приложении - хеширование)
-    if (password) {
-      providedAuth.password = password === 'moderator123'; // временно
-    }
-    
-    if (secretWord) {
-      providedAuth.secretWord = secretWord === 'admin_secret';
-    }
-    
-    if (extraPassword) {
-      providedAuth.extraPassword = extraPassword === 'lead_extra';
-    }
-    
-    // Проверяем выполнены ли все требования
-    const isValid = requirements.every(req => providedAuth[req]);
-    
-    if (!isValid) {
-      return res.status(401).json({ 
-        success: false,
-        error: 'Insufficient authentication levels',
-        required: requirements,
-        provided: Object.keys(providedAuth).filter(k => providedAuth[k])
-      });
-    }
-    
-    // Обновляем статус
-    await pool.query(
-      'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-      ['online', Date.now(), user.user_id]
-    );
-    
-    res.json({
-      success: true,
-      message: 'Multi-level authentication successful',
-      user: {
-        user_id: user.user_id,
-        username: user.username,
-        display_name: user.display_name,
-        role: user.role,
-        auth_level: requirements.length
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Ошибка многоуровневой аутентификации:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Authentication failed: ' + error.message 
-    });
-  }
-});
-
 // 📋 Получить очередь жалоб
 app.get('/api/moderation/reports', async (req, res) => {
   try {
@@ -1100,7 +898,7 @@ app.get('/api/groups/:groupId', async (req, res) => {
     
     const group = groupResult.rows[0];
     
-    // Получаем участников группы
+    // Получаем участники группы
     const membersResult = await pool.query(
       'SELECT user_id, role FROM group_members WHERE group_id = $1',
       [groupId]
@@ -1163,7 +961,7 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`🚀 Messenger backend running on port ${port}`);
   console.log(`🔗 WebSocket server ready`);
   console.log(`📊 Database: PostgreSQL`);
-  console.log(`🔐 Auth endpoints: /api/auth/login, /api/auth/register`);
+  console.log(`🔐 Auth endpoints: /api/auth/register, /api/auth/multi-level-login`);
   console.log(`💬 Chat endpoints: /api/chats, /api/messages, /api/messages/send`);
   console.log(`👥 Group endpoints: /api/groups, /api/groups/:id`);
   console.log(`⏰ Started at: ${new Date().toISOString()}`);
