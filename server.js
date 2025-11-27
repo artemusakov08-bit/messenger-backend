@@ -354,14 +354,27 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
   try {
     const { phone } = req.params;
     console.log('🔍 Searching user by phone:', phone);
-    
+
+    // Форматируем номер в международный формат
+    let formattedPhone = phone;
+    if (!phone.startsWith('+')) {
+      if (phone.startsWith('7') || phone.startsWith('8')) {
+        formattedPhone = '+7' + phone.slice(1);
+      } else if (phone.length === 10) {
+        formattedPhone = '+7' + phone;
+      }
+    }
+
+    console.log('📞 Formatted phone:', formattedPhone);
+
     const client = await db.getClient();
     const result = await client.query(
       'SELECT user_id, username, display_name, phone, role, status, is_premium, auth_level FROM users WHERE phone = $1',
-      [phone]
+      [formattedPhone]
     );
     
     if (result.rows.length === 0) {
+      console.log('❌ User not found for phone:', formattedPhone);
       return res.status(404).json({ 
         success: false,
         error: 'User not found' 
@@ -369,6 +382,8 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
     }
     
     const user = result.rows[0];
+    console.log('✅ User found:', user.user_id);
+
     res.json({
       success: true,
       user: {
@@ -384,10 +399,10 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Error in moderation user by phone endpoint:', error);
+    console.error('❌ Error in moderation user endpoint:', error);
     res.status(500).json({ 
       success: false,
-      error: 'Internal server error' 
+      error: 'Internal server error: ' + error.message 
     });
   }
 });
