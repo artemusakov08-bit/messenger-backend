@@ -3,83 +3,87 @@ const MultiLevelAuthService = require('../services/auth/MultiLevelAuthService');
 const jwt = require('jsonwebtoken');
 
 class AuthController {
-    // ✅ РЕГИСТРАЦИЯ
-   async register(req, res) {
-    try {
-        const { phone, password, role } = req.body;
+    async register(req, res) {
+        try {
+            const { phone, password } = req.body;
 
-        console.log('Registration attempt:', { phone, role });
+            console.log('Registration attempt:', { phone });
 
-        // 🔥 ПРОВЕРЯЕМ ТОЛЬКО САМОЕ НЕОБХОДИМОЕ
-        if (!phone || !password) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Телефон и пароль обязательны' 
-            });
-        }
-
-        const existingUser = await User.findOne({ phone });
-        if (existingUser) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Пользователь с таким телефоном уже существует' 
-            });
-        }
-
-        // 🔥 АВТОМАТИЧЕСКИ ГЕНЕРИРУЕМ DISPLAY_NAME
-        const displayName = "User " + phone.slice(-4);
-
-        const newUser = new User({
-            phone,
-            displayName, // 🔥 АВТОМАТИЧЕСКОЕ ИМЯ
-            password: password,
-            role: role || 'user',
-            isPremium: false,
-            isBanned: false,
-            warnings: 0,
-            authLevel: 'sms_only'
-        });
-
-        await newUser.save();
-        console.log('User registered successfully:', newUser._id);
-
-        const token = jwt.sign(
-            { 
-                userId: newUser._id, 
-                role: newUser.role
-            },
-            process.env.JWT_SECRET || 'fallback-secret',
-            { expiresIn: '24h' }
-        );
-
-        res.status(201).json({
-            success: true,
-            message: 'Пользователь успешно зарегистрирован',
-            token: token,
-            user: {
-                id: newUser._id,
-                phone: newUser.phone,
-                displayName: newUser.displayName,
-                role: newUser.role,
-                authLevel: newUser.authLevel
+            // 🔥 ПРОВЕРЯЕМ ТОЛЬКО phone И password
+            if (!phone) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Телефон обязателен' 
+                });
             }
-        });
 
-    } catch (error) {
-        console.error('Registration error:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка сервера при регистрации: ' + error.message 
-        });
+            if (!password) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Пароль обязателен' 
+                });
+            }
+
+            const existingUser = await User.findOne({ phone });
+            if (existingUser) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Пользователь с таким телефоном уже существует' 
+                });
+            }
+
+            // 🔥 АВТОМАТИЧЕСКИ ГЕНЕРИРУЕМ DISPLAY_NAME
+            const displayName = "User " + phone.slice(-4);
+
+            const newUser = new User({
+                phone,
+                displayName,
+                password: password,
+                role: 'user',
+                isPremium: false,
+                isBanned: false,
+                warnings: 0,
+                authLevel: 'sms_only'
+            });
+
+            await newUser.save();
+            console.log('User registered successfully:', newUser._id);
+
+            const token = jwt.sign(
+                { 
+                    userId: newUser._id, 
+                    role: newUser.role
+                },
+                process.env.JWT_SECRET || 'fallback-secret',
+                { expiresIn: '24h' }
+            );
+
+            res.status(201).json({
+                success: true,
+                message: 'Пользователь успешно зарегистрирован',
+                token: token,
+                user: {
+                    id: newUser._id,
+                    phone: newUser.phone,
+                    displayName: newUser.displayName,
+                    role: newUser.role,
+                    authLevel: newUser.authLevel
+                }
+            });
+
+        } catch (error) {
+            console.error('Registration error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка сервера при регистрации: ' + error.message 
+            });
+        }
     }
-}   
 
-    // ✅ УПРОЩЕННЫЙ ВХОД ДЛЯ ТЕСТА
     async multiLevelLogin(req, res) {
         try {
             const { phone, smsCode } = req.body;
             
-            // Находим пользователя
             const user = await User.findOne({ phone });
             if (!user) {
                 return res.status(404).json({ 
@@ -88,7 +92,6 @@ class AuthController {
                 });
             }
 
-            // Упрощенная проверка SMS (всегда true для теста)
             const isSMSValid = true;
             if (!isSMSValid) {
                 return res.status(401).json({ 
@@ -97,7 +100,6 @@ class AuthController {
                 });
             }
 
-            // Генерируем токен
             const token = jwt.sign(
                 { 
                     userId: user._id, 

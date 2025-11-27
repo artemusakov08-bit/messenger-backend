@@ -1,12 +1,16 @@
+const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
+
 const userSchema = new mongoose.Schema({
     phone: { type: String, required: true, unique: true },
     username: { 
         type: String, 
-        required: false,  
-        unique: true 
+        required: false,
+        unique: true,
+        sparse: true  // 🔥 ДОБАВЛЕНО
     },
     displayName: { type: String, required: true },
-    password: { type: String },
+    password: { type: String, required: true },  // 🔥 ДОБАВЛЕНО required: true
     role: { 
         type: String, 
         enum: ['user', 'moderator', 'admin', 'lead', 'super_admin'],
