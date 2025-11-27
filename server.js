@@ -349,6 +349,49 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
+// 🔧 ЭНДПОИНТ ДЛЯ ПОИСКА ПОЛЬЗОВАТЕЛЯ ПО ТЕЛЕФОНУ
+app.get('/api/moderation/user/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    console.log('🔍 Searching user by phone:', phone);
+    
+    const client = await db.getClient();
+    const result = await client.query(
+      'SELECT user_id, username, display_name, phone, role, status, is_premium, auth_level FROM users WHERE phone = $1',
+      [phone]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+    
+    const user = result.rows[0];
+    res.json({
+      success: true,
+      user: {
+        id: user.user_id,
+        username: user.username,
+        displayName: user.display_name,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        is_premium: user.is_premium,
+        authLevel: user.auth_level
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in moderation user by phone endpoint:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
+  }
+});
+
 app.get('/api/test-db', async (req, res) => {
   try {
     console.log('🔧 Testing database connection...');
