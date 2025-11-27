@@ -14,15 +14,16 @@ class Database {
                 throw new Error('DATABASE_URL environment variable is required');
             }
 
+            console.log('🔗 Connecting to PostgreSQL...');
+            
             this.pool = new Pool({
                 connectionString: DATABASE_URL,
-                ssl: process.env.NODE_ENV === 'production' ? { 
-                    rejectUnauthorized: false 
-                } : false,
-                // Дополнительные настройки
-                max: 20, // максимальное количество клиентов в пуле
+                ssl: {
+                    rejectUnauthorized: false
+                },
+                max: 10,
                 idleTimeoutMillis: 30000,
-                connectionTimeoutMillis: 2000,
+                connectionTimeoutMillis: 5000,
             });
 
             // Тестируем подключение
@@ -33,52 +34,46 @@ class Database {
             this.isConnected = true;
             this.setupEventHandlers();
             
+            return this.pool;
+            
         } catch (error) {
-            console.error('❌ Ошибка подключения к PostgreSQL:', error);
+            console.error('❌ Ошибка подключения к PostgreSQL:', error.message);
             process.exit(1);
         }
     }
 
     setupEventHandlers() {
-        this.pool.on('error', (error) => {
-            console.error('PostgreSQL ошибка:', error);
-            this.isConnected = false;
-        });
-
-        this.pool.on('connect', () => {
-            console.log('✅ Новое подключение к PostgreSQL установлено');
-        });
-
-        process.on('SIGINT', async () => {
-            await this.disconnect();
-            console.log('PostgreSQL соединение закрыто');
-            process.exit(0);
-        });
-    }
-
-    async disconnect() {
-        if (this.pool && this.isConnected) {
-            await this.pool.end();
-            this.isConnected = false;
-            console.log('PostgreSQL отключена');
+        if (this.pool) {
+            this.pool.on('error', (error) => {
+                console.error('PostgreSQL pool error:', error);
+                this.isConnected = false;
+            });
         }
     }
 
-    // Метод для выполнения запросов
     async query(text, params) {
-        if (!this.isConnected) {
-            throw new Error('Database not connected');
+        if (!this.isConnected || !this.pool) {
+            await this.connect();
         }
         return await this.pool.query(text, params);
     }
 
-    // Метод для получения клиента (для транзакций)
     async getClient() {
-        if (!this.isConnected) {
-            throw new Error('Database not connected');
+        if (!this.isConnected || !this.pool) {
+            await this.connect();
         }
         return await this.pool.connect();
     }
+
+    async disconnect() {
+        if (this.pool) {
+            await this.pool.end();
+            this.isConnected = false;
+            console.log('PostgreSQL disconnected');
+        }
+    }
 }
 
-module.exports = new Database();
+const database = new Database();
+
+module.exports = database;

@@ -1,9 +1,9 @@
-const pool = require('../config/database'); // или путь к твоему pool
+const db = require('../config/database');
 const jwt = require('jsonwebtoken');
 
 class AuthController {
     async register(req, res) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             const { phone } = req.body;
 
@@ -92,7 +92,7 @@ class AuthController {
     }
 
     async multiLevelLogin(req, res) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             const { phone, smsCode } = req.body;
             
@@ -161,7 +161,7 @@ class AuthController {
     }
 
     async getAuthRequirements(req, res) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             const { phone } = req.params;
             
@@ -199,9 +199,8 @@ class AuthController {
         }
     }
 
-    // Дополнительный метод для получения пользователя по ID
     async getUserById(req, res) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             const { userId } = req.params;
 
@@ -243,9 +242,8 @@ class AuthController {
         }
     }
 
-    // Метод для обновления профиля
     async updateProfile(req, res) {
-        const client = await pool.connect();
+        const client = await db.getClient();
         try {
             const { userId } = req.params;
             const { username, displayName } = req.body;

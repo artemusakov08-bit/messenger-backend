@@ -7,6 +7,7 @@ const http = require('http');
 
 // 🔥 ПОДКЛЮЧАЕМ НОВЫЕ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
+const db = require('./src/config/database');
 
 const app = express();
 const server = http.createServer(app);
