@@ -64,8 +64,11 @@ async function initializeDatabase() {
   try {
     console.log('🔄 Initializing database...');
     
-    // 🔥 ОБНОВЛЕННАЯ ТАБЛИЦА USERS - БЕЗ ОБЯЗАТЕЛЬНЫХ USERNAME/EMAIL
-    await pool.query(`
+    // Подключаемся к базе
+    await db.connect();
+    
+    // 🔥 ОБНОВЛЕННАЯ ТАБЛИЦА USERS С КОЛОНКОЙ PHONE
+    await db.query(`
       CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         username TEXT UNIQUE,
@@ -84,7 +87,7 @@ async function initializeDatabase() {
       )
     `);
     
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS chats (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -93,7 +96,7 @@ async function initializeDatabase() {
       )
     `);
     
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
@@ -106,7 +109,7 @@ async function initializeDatabase() {
     `);
     
     // Создаем таблицы для групп
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -116,7 +119,7 @@ async function initializeDatabase() {
       )
     `);
     
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS group_members (
         group_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
@@ -129,16 +132,16 @@ async function initializeDatabase() {
     console.log('🔄 Creating moderation tables...');
     
     // Таблица жалоб
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS reports (
         id VARCHAR(50) PRIMARY KEY,
-        reporter_id VARCHAR(50) REFERENCES users(user_id),
-        reported_user_id VARCHAR(50) REFERENCES users(user_id),
+        reporter_id VARCHAR(50),
+        reported_user_id VARCHAR(50),
         reported_message_id VARCHAR(50),
         reason TEXT NOT NULL,
         priority VARCHAR(20) DEFAULT 'medium',
         status VARCHAR(20) DEFAULT 'pending',
-        assigned_moderator_id VARCHAR(50) REFERENCES users(user_id),
+        assigned_moderator_id VARCHAR(50),
         is_premium BOOLEAN DEFAULT false,
         escalation_level INTEGER DEFAULT 0,
         resolution TEXT,
@@ -148,11 +151,11 @@ async function initializeDatabase() {
     `);
     
     // Действия модерации
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS moderation_actions (
         id VARCHAR(50) PRIMARY KEY,
-        moderator_id VARCHAR(50) REFERENCES users(user_id),
-        target_user_id VARCHAR(50) REFERENCES users(user_id),
+        moderator_id VARCHAR(50),
+        target_user_id VARCHAR(50),
         action_type VARCHAR(50) NOT NULL,
         reason TEXT,
         duration BIGINT,
@@ -161,22 +164,22 @@ async function initializeDatabase() {
     `);
     
     // Шаблонные ответы
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS template_responses (
         id VARCHAR(50) PRIMARY KEY,
         title VARCHAR(255) NOT NULL,
         content TEXT NOT NULL,
         category VARCHAR(50),
-        created_by VARCHAR(50) REFERENCES users(user_id),
+        created_by VARCHAR(50),
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
       )
     `);
     
     // Аудит действий
-    await pool.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(50) PRIMARY KEY,
-        user_id VARCHAR(50) REFERENCES users(user_id),
+        user_id VARCHAR(50),
         action VARCHAR(255) NOT NULL,
         target_type VARCHAR(50),
         target_id VARCHAR(50),
