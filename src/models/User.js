@@ -7,10 +7,13 @@ const userSchema = new mongoose.Schema({
         type: String, 
         required: false,
         unique: true,
-        sparse: true  // 🔥 ДОБАВЛЕНО
+        sparse: true
     },
     displayName: { type: String, required: true },
-    password: { type: String, required: true },  // 🔥 ДОБАВЛЕНО required: true
+    password: { 
+        type: String, 
+        required: false  // 🔥 МЕНЯЕМ НА false - пароль опциональный
+    },
     role: { 
         type: String, 
         enum: ['user', 'moderator', 'admin', 'lead', 'super_admin'],
@@ -28,13 +31,16 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 userSchema.pre('save', async function(next) {
-    if (this.isModified('password')) {
+    // 🔥 ХЭШИРУЕМ ПАРОЛЬ ТОЛЬКО ЕСЛИ ОН ЕСТЬ
+    if (this.isModified('password') && this.password) {
         this.password = await bcrypt.hash(this.password, 10);
     }
     next();
 });
 
 userSchema.methods.comparePassword = async function(password) {
+    // 🔥 ЕСЛИ ПАРОЛЯ НЕТ - ВОЗВРАЩАЕМ FALSE
+    if (!this.password) return false;
     return bcrypt.compare(password, this.password);
 };
 

@@ -5,22 +5,15 @@ const jwt = require('jsonwebtoken');
 class AuthController {
     async register(req, res) {
         try {
-            const { phone, password } = req.body;
+            const { phone } = req.body; // 🔥 УБИРАЕМ password ИЗ ПАРАМЕТРОВ
 
             console.log('Registration attempt:', { phone });
 
-            // 🔥 ПРОВЕРЯЕМ ТОЛЬКО phone И password
+            // 🔥 ПРОВЕРЯЕМ ТОЛЬКО PHONE
             if (!phone) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Телефон обязателен' 
-                });
-            }
-
-            if (!password) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Пароль обязателен' 
                 });
             }
 
@@ -38,12 +31,12 @@ class AuthController {
             const newUser = new User({
                 phone,
                 displayName,
-                password: password,
+                password: null, // 🔥 ПАРОЛЬ NULL ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ
                 role: 'user',
                 isPremium: false,
                 isBanned: false,
                 warnings: 0,
-                authLevel: 'sms_only'
+                authLevel: 'sms_only' // 🔥 ТОЛЬКО SMS АУТЕНТИФИКАЦИЯ
             });
 
             await newUser.save();
@@ -92,7 +85,9 @@ class AuthController {
                 });
             }
 
-            const isSMSValid = true;
+            // 🔥 ДЛЯ ПОЛЬЗОВАТЕЛЕЙ БЕЗ ПАРОЛЯ - ТОЛЬКО SMS ПРОВЕРКА
+            const isSMSValid = true; // временно всегда true
+            
             if (!isSMSValid) {
                 return res.status(401).json({ 
                     success: false,
@@ -115,6 +110,7 @@ class AuthController {
                 user: {
                     id: user._id,
                     phone: user.phone,
+                    displayName: user.displayName,
                     role: user.role
                 }
             });
@@ -142,7 +138,7 @@ class AuthController {
             res.json({
                 success: true,
                 role: user.role,
-                requirements: ['sms'],
+                requirements: ['sms'], // 🔥 ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ ТОЛЬКО SMS
                 message: 'Требуется SMS аутентификация'
             });
 
