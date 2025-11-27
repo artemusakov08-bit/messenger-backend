@@ -5,11 +5,10 @@ const jwt = require('jsonwebtoken');
 class AuthController {
     async register(req, res) {
         try {
-            const { phone } = req.body; // 🔥 УБИРАЕМ password ИЗ ПАРАМЕТРОВ
+            const { phone } = req.body;
 
             console.log('Registration attempt:', { phone });
 
-            // 🔥 ПРОВЕРЯЕМ ТОЛЬКО PHONE
             if (!phone) {
                 return res.status(400).json({ 
                     success: false,
@@ -25,18 +24,21 @@ class AuthController {
                 });
             }
 
-            // 🔥 АВТОМАТИЧЕСКИ ГЕНЕРИРУЕМ DISPLAY_NAME
+            // 🔥 АВТОГЕНЕРАЦИЯ ВСЕХ НУЖНЫХ ПОЛЕЙ
+            const timestamp = Date.now();
+            const username = "user_" + timestamp;
             const displayName = "User " + phone.slice(-4);
 
             const newUser = new User({
                 phone,
-                displayName,
-                password: null, // 🔥 ПАРОЛЬ NULL ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ
+                username, // 🔥 АВТОМАТИЧЕСКИ ГЕНЕРИРУЕМ
+                displayName, // 🔥 АВТОМАТИЧЕСКИ ГЕНЕРИРУЕМ
+                password: null,
                 role: 'user',
                 isPremium: false,
                 isBanned: false,
                 warnings: 0,
-                authLevel: 'sms_only' // 🔥 ТОЛЬКО SMS АУТЕНТИФИКАЦИЯ
+                authLevel: 'sms_only'
             });
 
             await newUser.save();
@@ -58,6 +60,7 @@ class AuthController {
                 user: {
                     id: newUser._id,
                     phone: newUser.phone,
+                    username: newUser.username,
                     displayName: newUser.displayName,
                     role: newUser.role,
                     authLevel: newUser.authLevel
@@ -85,9 +88,7 @@ class AuthController {
                 });
             }
 
-            // 🔥 ДЛЯ ПОЛЬЗОВАТЕЛЕЙ БЕЗ ПАРОЛЯ - ТОЛЬКО SMS ПРОВЕРКА
-            const isSMSValid = true; // временно всегда true
-            
+            const isSMSValid = true;
             if (!isSMSValid) {
                 return res.status(401).json({ 
                     success: false,
@@ -110,6 +111,7 @@ class AuthController {
                 user: {
                     id: user._id,
                     phone: user.phone,
+                    username: user.username,
                     displayName: user.displayName,
                     role: user.role
                 }
@@ -138,7 +140,7 @@ class AuthController {
             res.json({
                 success: true,
                 role: user.role,
-                requirements: ['sms'], // 🔥 ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ ТОЛЬКО SMS
+                requirements: ['sms'],
                 message: 'Требуется SMS аутентификация'
             });
 
