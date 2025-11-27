@@ -5,9 +5,9 @@ class AuthController {
     async register(req, res) {
         const client = await db.getClient();
         try {
-            const { phone } = req.body;
+            const { phone, role, displayName, username, is_premium, auth_level } = req.body;
 
-            console.log('🆕 NEW CONTROLLER - Registration:', { phone });
+            console.log('🆕 NEW CONTROLLER - Registration:', req.body);
 
             if (!phone) {
                 return res.status(400).json({ 
@@ -29,11 +29,14 @@ class AuthController {
                 });
             }
 
-            // Автогенерация данных
+            // Автогенерация данных если не указаны
             const timestamp = Date.now();
             const userId = 'user_' + timestamp;
-            const username = "user_" + timestamp;
-            const displayName = "User " + phone.slice(-4);
+            const generatedUsername = username || "user_" + timestamp;
+            const generatedDisplayName = displayName || "User " + phone.slice(-4);
+            const userRole = role || 'user';
+            const premiumStatus = is_premium || false;
+            const authLevel = auth_level || 'sms_only';
 
             // Сохраняем в PostgreSQL
             const result = await client.query(
@@ -44,18 +47,23 @@ class AuthController {
                 [
                     userId, 
                     phone, 
-                    username, 
-                    displayName,
-                    'user',     // role
-                    false,      // is_premium
-                    false,      // is_banned
-                    0,          // warnings
-                    'sms_only'  // auth_level
+                    generatedUsername, 
+                    generatedDisplayName,
+                    userRole,           // Используем роль из запроса
+                    premiumStatus,      // Используем премиум статус из запроса
+                    false,              // is_banned
+                    0,                  // warnings
+                    authLevel           // Используем уровень авторизации из запроса
                 ]
             );
 
             const newUser = result.rows[0];
-            console.log('✅ User registered in PostgreSQL:', newUser.user_id);
+            console.log('✅ User registered in PostgreSQL:', { 
+                id: newUser.user_id, 
+                phone: newUser.phone, 
+                role: newUser.role,
+                is_premium: newUser.is_premium 
+            });
 
             const token = jwt.sign(
                 { 
@@ -76,6 +84,7 @@ class AuthController {
                     username: newUser.username,
                     displayName: newUser.display_name,
                     role: newUser.role,
+                    is_premium: newUser.is_premium,
                     authLevel: newUser.auth_level
                 }
             });
@@ -145,7 +154,9 @@ class AuthController {
                     phone: user.phone,
                     username: user.username,
                     displayName: user.display_name,
-                    role: user.role
+                    role: user.role,
+                    is_premium: user.is_premium,
+                    status: user.status
                 }
             });
 
@@ -181,11 +192,17 @@ class AuthController {
 
             const user = userResult.rows[0];
 
+            // Определяем требования в зависимости от роли
+            let requirements = ['sms'];
+            if (user.role === 'admin' || user.role === 'super_admin') {
+                requirements.push('2fa', 'biometric');
+            }
+
             res.json({
                 success: true,
                 role: user.role,
-                requirements: ['sms'], // Для обычных пользователей только SMS
-                message: 'Требуется SMS аутентификация'
+                requirements: requirements,
+                message: `Требуется ${requirements.join(', ')} аутентификация`
             });
 
         } catch (error) {
@@ -227,7 +244,11 @@ class AuthController {
                     displayName: user.display_name,
                     role: user.role,
                     status: user.status,
-                    authLevel: user.auth_level
+                    authLevel: user.auth_level,
+                    is_premium: user.is_premium,
+                    is_banned: user.is_banned,
+                    warnings: user.warnings,
+                    last_seen: user.last_seen
                 }
             });
 
@@ -246,7 +267,7 @@ class AuthController {
         const client = await db.getClient();
         try {
             const { userId } = req.params;
-            const { username, displayName } = req.body;
+            const { username, displayName, role, is_premium, auth_level } = req.body;
 
             // Проверяем существует ли пользователь
             const userResult = await client.query(
@@ -261,8 +282,10 @@ class AuthController {
                 });
             }
 
+            const currentUser = userResult.rows[0];
+
             // Если указан username, проверяем что он уникальный
-            if (username) {
+            if (username && username !== currentUser.username) {
                 const existingUsername = await client.query(
                     'SELECT * FROM users WHERE username = $1 AND user_id != $2',
                     [username, userId]
@@ -293,6 +316,24 @@ class AuthController {
                 paramCount++;
             }
 
+            if (role) {
+                updateFields.push(`role = $${paramCount}`);
+                updateValues.push(role);
+                paramCount++;
+            }
+
+            if (is_premium !== undefined) {
+                updateFields.push(`is_premium = $${paramCount}`);
+                updateValues.push(is_premium);
+                paramCount++;
+            }
+
+            if (auth_level) {
+                updateFields.push(`auth_level = $${paramCount}`);
+                updateValues.push(auth_level);
+                paramCount++;
+            }
+
             if (updateFields.length === 0) {
                 return res.status(400).json({ 
                     success: false,
@@ -320,12 +361,63 @@ class AuthController {
                     phone: updatedUser.phone,
                     username: updatedUser.username,
                     displayName: updatedUser.display_name,
-                    role: updatedUser.role
+                    role: updatedUser.role,
+                    is_premium: updatedUser.is_premium,
+                    authLevel: updatedUser.auth_level
                 }
             });
 
         } catch (error) {
             console.error('❌ Update profile error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: error.message 
+            });
+        } finally {
+            client.release();
+        }
+    }
+
+    // Новый метод для получения всех пользователей с фильтрацией
+    async getUsers(req, res) {
+        const client = await db.getClient();
+        try {
+            const { role, is_premium, limit = 100 } = req.query;
+            
+            let query = 'SELECT * FROM users';
+            const queryParams = [];
+            let whereConditions = [];
+            let paramCount = 1;
+
+            if (role) {
+                whereConditions.push(`role = $${paramCount}`);
+                queryParams.push(role);
+                paramCount++;
+            }
+
+            if (is_premium !== undefined) {
+                whereConditions.push(`is_premium = $${paramCount}`);
+                queryParams.push(is_premium === 'true');
+                paramCount++;
+            }
+
+            if (whereConditions.length > 0) {
+                query += ' WHERE ' + whereConditions.join(' AND ');
+            }
+
+            query += ' ORDER BY user_id LIMIT $' + paramCount;
+            queryParams.push(parseInt(limit));
+
+            const result = await client.query(query, queryParams);
+
+            res.json({
+                success: true,
+                count: result.rows.length,
+                users: result.rows
+            });
+
+        } catch (error) {
+            console.error('❌ Get users error:', error);
             res.status(500).json({ 
                 success: false,
                 error: error.message 
