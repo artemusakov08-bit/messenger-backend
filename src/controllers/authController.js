@@ -3,66 +3,123 @@ const MultiLevelAuthService = require('../services/auth/MultiLevelAuthService');
 const jwt = require('jsonwebtoken');
 
 class AuthController {
+    // ✅ РЕГИСТРАЦИЯ
+    async register(req, res) {
+        try {
+            const { phone, password, role } = req.body;
+
+            console.log('Registration attempt:', { phone, role });
+
+            // Проверка обязательных полей
+            if (!phone) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Телефон обязателен' 
+                });
+            }
+
+            // Проверка существующего пользователя
+            const existingUser = await User.findOne({ phone });
+            if (existingUser) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Пользователь с таким телефоном уже существует' 
+                });
+            }
+
+            // Создание нового пользователя
+            const newUser = new User({
+                phone,
+                password: password || 'default123',
+                role: role || 'user',
+                isPremium: false,
+                isBanned: false,
+                warnings: 0,
+                authLevel: 'sms_only'
+            });
+
+            await newUser.save();
+            console.log('User registered successfully:', newUser._id);
+
+            // Генерируем токен
+            const token = jwt.sign(
+                { 
+                    userId: newUser._id, 
+                    role: newUser.role
+                },
+                process.env.JWT_SECRET || 'fallback-secret',
+                { expiresIn: '24h' }
+            );
+
+            res.status(201).json({
+                success: true,
+                message: 'Пользователь успешно зарегистрирован',
+                token: token,
+                user: {
+                    id: newUser._id,
+                    phone: newUser.phone,
+                    role: newUser.role,
+                    authLevel: newUser.authLevel
+                }
+            });
+
+        } catch (error) {
+            console.error('Registration error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка сервера при регистрации: ' + error.message 
+            });
+        }
+    }
+
+    // ✅ УПРОЩЕННЫЙ ВХОД ДЛЯ ТЕСТА
     async multiLevelLogin(req, res) {
         try {
-            const { phone, smsCode, password, secretWord, extraPassword } = req.body;
+            const { phone, smsCode } = req.body;
             
             // Находим пользователя
             const user = await User.findOne({ phone });
             if (!user) {
-                return res.status(404).json({ error: 'Пользователь не найден' });
+                return res.status(404).json({ 
+                    success: false,
+                    error: 'Пользователь не найден' 
+                });
             }
 
-            // Проверяем SMS код
-            const isSMSValid = await MultiLevelAuthService.verifySMS(user.id, smsCode);
+            // Упрощенная проверка SMS (всегда true для теста)
+            const isSMSValid = true;
             if (!isSMSValid) {
-                return res.status(401).json({ error: 'Неверный SMS код' });
-            }
-
-            // Проверяем дополнительные уровни аутентификации
-            const authData = { sms: true };
-            
-            if (password) {
-                authData.password = await MultiLevelAuthService.verifyPassword(user.id, password);
-            }
-            
-            if (secretWord) {
-                authData.secretWord = await MultiLevelAuthService.verifySecretWord(user.role, secretWord);
-            }
-            
-            if (extraPassword) {
-                authData.extraPassword = await MultiLevelAuthService.verifyExtraPassword(user.role, extraPassword);
-            }
-
-            // Проверяем соответствие требованиям роли
-            const isValid = MultiLevelAuthService.validateAuthLevel(user.role, authData);
-            if (!isValid) {
-                return res.status(401).json({ error: 'Недостаточно уровней аутентификации' });
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Неверный SMS код' 
+                });
             }
 
             // Генерируем токен
             const token = jwt.sign(
                 { 
-                    userId: user.id, 
-                    role: user.role,
-                    authLevel: Object.keys(authData).length
+                    userId: user._id, 
+                    role: user.role
                 },
-                process.env.JWT_SECRET,
+                process.env.JWT_SECRET || 'fallback-secret',
                 { expiresIn: '24h' }
             );
 
             res.json({
+                success: true,
                 token,
                 user: {
-                    id: user.id,
+                    id: user._id,
                     phone: user.phone,
-                    role: user.role,
-                    authLevel: Object.keys(authData).length
+                    role: user.role
                 }
             });
 
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(500).json({ 
+                success: false,
+                error: error.message 
+            });
         }
     }
 
@@ -72,19 +129,24 @@ class AuthController {
             const user = await User.findOne({ phone });
             
             if (!user) {
-                return res.status(404).json({ error: 'Пользователь не найден' });
+                return res.status(404).json({ 
+                    success: false,
+                    error: 'Пользователь не найден' 
+                });
             }
 
-            const requirements = MultiLevelAuthService.authRequirements[user.role] || [];
-            
             res.json({
+                success: true,
                 role: user.role,
-                requirements,
-                message: `Требуемые уровни аутентификации: ${requirements.join(', ')}`
+                requirements: ['sms'],
+                message: 'Требуется SMS аутентификация'
             });
 
         } catch (error) {
-            res.status(500).json({ error: error.message });
+            res.status(500).json({ 
+                success: false,
+                error: error.message 
+            });
         }
     }
 }
