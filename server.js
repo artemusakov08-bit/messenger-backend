@@ -42,6 +42,8 @@ app.use((req, res, next) => {
 
 // 🔥 ПОДКЛЮЧАЕМ РОУТЫ
 app.use('/api/auth', authRoutes);
+const securityRoutes = require('./src/routes/security');
+app.use('/api/security', securityRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -67,9 +69,44 @@ async function initializeDatabase() {
     // Подключаемся к базе
     await db.connect();
     
-    // 🔥 УДАЛЯЕМ И СОЗДАЕМ ТАБЛИЦУ USERS ЗАНОВО
-    await db.query('DROP TABLE IF EXISTS users CASCADE');
-    
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS user_security (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) UNIQUE NOT NULL,
+        two_fa_enabled BOOLEAN DEFAULT false,
+        two_fa_secret TEXT,
+        two_fa_setup_at BIGINT,
+        two_fa_attempts INTEGER DEFAULT 0,
+        two_fa_locked_until BIGINT,
+        code_word_enabled BOOLEAN DEFAULT false,
+        code_word_hash TEXT,
+        code_word_hint VARCHAR(100),
+        code_word_set_at BIGINT,
+        code_word_attempts INTEGER DEFAULT 0,
+        code_word_locked_until BIGINT,
+        additional_passwords JSONB DEFAULT '[]',
+        security_level VARCHAR(20) DEFAULT 'low',
+        last_security_update BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
+        trusted_devices JSONB DEFAULT '[]',
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+      )
+    `);
+
+    // Таблица кодов верификации
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        id VARCHAR(50) PRIMARY KEY,
+        phone VARCHAR(20) NOT NULL,
+        code VARCHAR(10) NOT NULL,
+        type VARCHAR(20) DEFAULT 'sms',
+        attempts INTEGER DEFAULT 0,
+        max_attempts INTEGER DEFAULT 3,
+        is_used BOOLEAN DEFAULT false,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
     await db.query(`
       CREATE TABLE users (
         user_id TEXT PRIMARY KEY,
@@ -192,6 +229,9 @@ async function initializeDatabase() {
       )
     `);
     
+    await db.query('CREATE INDEX IF NOT EXISTS idx_verification_codes_phone_expires ON verification_codes(phone, expires_at)');
+    await db.query('CREATE INDEX IF NOT EXISTS idx_user_security_user_id ON user_security(user_id)');
+
     console.log('✅ All database tables created/verified');
     
   } catch (error) {
