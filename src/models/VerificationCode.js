@@ -1,6 +1,7 @@
 const pool = require('../config/database');
 
 class VerificationCode {
+    // 🔍 Найти действительный код
     static async findOne(conditions) {
         const client = await pool.connect();
         try {
@@ -17,6 +18,7 @@ class VerificationCode {
         }
     }
 
+    // ➕ Создать новый код
     static async create(codeData) {
         const client = await pool.connect();
         try {
@@ -40,6 +42,7 @@ class VerificationCode {
         }
     }
 
+    // ✏️ Отметить код как использованный
     static async markAsUsed(codeId) {
         const client = await pool.connect();
         try {
@@ -53,18 +56,15 @@ class VerificationCode {
         }
     }
 
-    static async incrementAttempts(codeId) {
+    // 🗑️ Очистить просроченные коды
+    static async cleanExpiredCodes() {
         const client = await pool.connect();
         try {
             const result = await client.query(
-                `UPDATE verification_codes 
-                 SET attempts = attempts + 1,
-                     is_used = (attempts + 1) >= max_attempts
-                 WHERE id = $1 
-                 RETURNING *`,
-                [codeId]
+                'DELETE FROM verification_codes WHERE expires_at < $1 RETURNING *',
+                [new Date()]
             );
-            return result.rows[0] || null;
+            return result.rows;
         } finally {
             client.release();
         }

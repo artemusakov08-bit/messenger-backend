@@ -3,29 +3,36 @@ const router = express.Router();
 const authMiddleware = require('../middleware/authMiddleware');
 const securityController = require('../controllers/securityController');
 
+// Применяем аутентификацию ко всем маршрутам
 router.use(authMiddleware.authenticate);
 
-router.get('/settings', securityController.getSecuritySettings);
-router.post('/2fa/generate', securityController.generate2FASecret);
-router.post('/2fa/enable', securityController.enable2FA);
-router.post('/codeword/set', securityController.setCodeWord);
-router.post('/passwords/add', securityController.addAdditionalPassword);
-router.post('/verify/:operation', securityController.verifySecurity);
+// 🔐 Получить настройки безопасности
+router.get('/settings', (req, res) => {
+  securityController.getSecuritySettings(req, res);
+});
 
-router.get('/dashboard', async (req, res) => {
-    try {
-        res.json({
-            success: true,
-            message: 'Панель управления безопасностью',
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        console.error('Ошибка получения панели безопасности:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Ошибка получения данных безопасности'
-        });
-    }
+// 🔄 2FA Routes
+router.post('/2fa/generate', (req, res) => {
+  securityController.generate2FASecret(req, res);
+});
+
+router.post('/2fa/enable', (req, res) => {
+  securityController.enable2FA(req, res);
+});
+
+// 🗣️ Code Word Routes
+router.post('/codeword/set', (req, res) => {
+  securityController.setCodeWord(req, res);
+});
+
+// 🔑 Additional Passwords Routes
+router.post('/passwords/add', (req, res) => {
+  securityController.addAdditionalPassword(req, res);
+});
+
+// 🛡️ Security Verification for sensitive operations
+router.post('/verify/:operation', (req, res) => {
+  securityController.verifySecurity(req, res);
 });
 
 module.exports = router;

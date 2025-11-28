@@ -3,6 +3,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
 class UserSecurity {
+    // 🔍 Найти настройки безопасности по userId
     static async findOne(conditions) {
         const client = await pool.connect();
         try {
@@ -17,6 +18,7 @@ class UserSecurity {
         }
     }
 
+    // 🔍 Найти или создать настройки безопасности
     static async findOrCreate(conditions, defaults) {
         const client = await pool.connect();
         try {
@@ -57,6 +59,7 @@ class UserSecurity {
         }
     }
 
+    // ✏️ Обновить настройки безопасности
     static async update(conditions, updates) {
         const client = await pool.connect();
         try {
@@ -98,6 +101,49 @@ class UserSecurity {
         } finally {
             client.release();
         }
+    }
+
+    // 🗣️ Установить кодовое слово
+    static async setCodeWord(userId, codeWord, hint = '') {
+        const codeWordHash = await bcrypt.hash(codeWord, 12);
+        
+        return await this.update(
+            { userId },
+            {
+                codeWordEnabled: true,
+                codeWordHash: codeWordHash,
+                codeWordHint: hint,
+                codeWordSetAt: Date.now(),
+                codeWordAttempts: 0,
+                codeWordLockedUntil: null,
+                securityLevel: 'medium'
+            }
+        );
+    }
+
+    // 🔑 Добавить дополнительный пароль
+    static async addAdditionalPassword(userId, password, name = 'Дополнительный пароль') {
+        const security = await this.findOne({ userId });
+        const additionalPasswords = security?.additional_passwords ? JSON.parse(security.additional_passwords) : [];
+        
+        const hashedPassword = await bcrypt.hash(password, 12);
+        const newPassword = {
+            id: crypto.randomBytes(8).toString('hex'),
+            name: name,
+            hash: hashedPassword,
+            createdAt: new Date().toISOString(),
+            used: false
+        };
+        
+        additionalPasswords.push(newPassword);
+        
+        return await this.update(
+            { userId },
+            {
+                additionalPasswords: additionalPasswords,
+                securityLevel: 'high'
+            }
+        );
     }
 }
 

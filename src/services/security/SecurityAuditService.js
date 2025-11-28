@@ -144,7 +144,7 @@ class SecurityAuditService {
         }
       });
     } catch (error) {
-      console.error('Ошибка логирования неудачной проверки безопасности:', error);
+      console.error('Ошибка логирования неудачной проверки безопасности:', error);  
     }
   }
 
