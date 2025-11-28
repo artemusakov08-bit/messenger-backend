@@ -5,7 +5,7 @@ const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
 const http = require('http');
 
-// 🔥 ПОДКЛЮЧАЕМ НОВЫЕ КОНТРОЛЛЕРЫ
+// 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
 const db = require('./src/config/database');
 
@@ -69,6 +69,27 @@ async function initializeDatabase() {
     // Подключаемся к базе
     await db.connect();
     
+    // 🔥 ПЕРВОЙ создаем таблицу users
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        username TEXT UNIQUE,
+        email TEXT,
+        display_name TEXT NOT NULL,
+        phone TEXT UNIQUE,
+        password TEXT,
+        status TEXT DEFAULT 'offline',
+        last_seen BIGINT,
+        role VARCHAR(20) DEFAULT 'user',
+        is_premium BOOLEAN DEFAULT false,
+        is_banned BOOLEAN DEFAULT false,
+        ban_expires BIGINT,
+        warnings INTEGER DEFAULT 0,
+        auth_level VARCHAR(50) DEFAULT 'sms_only'
+      )
+    `);
+    
+    // 🔥 ПОТОМ создаем user_security с foreign key
     await db.query(`
       CREATE TABLE IF NOT EXISTS user_security (
         id VARCHAR(50) PRIMARY KEY,
@@ -87,8 +108,7 @@ async function initializeDatabase() {
         additional_passwords JSONB DEFAULT '[]',
         security_level VARCHAR(20) DEFAULT 'low',
         last_security_update BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        trusted_devices JSONB DEFAULT '[]',
-        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        trusted_devices JSONB DEFAULT '[]'
       )
     `);
 
@@ -104,25 +124,6 @@ async function initializeDatabase() {
         is_used BOOLEAN DEFAULT false,
         expires_at TIMESTAMP NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-
-    await db.query(`
-      CREATE TABLE users (
-        user_id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        email TEXT,
-        display_name TEXT NOT NULL,
-        phone TEXT UNIQUE,
-        password TEXT,
-        status TEXT DEFAULT 'offline',
-        last_seen BIGINT,
-        role VARCHAR(20) DEFAULT 'user',
-        is_premium BOOLEAN DEFAULT false,
-        is_banned BOOLEAN DEFAULT false,
-        ban_expires BIGINT,
-        warnings INTEGER DEFAULT 0,
-        auth_level VARCHAR(50) DEFAULT 'sms_only'
       )
     `);
     
@@ -236,6 +237,8 @@ async function initializeDatabase() {
     
   } catch (error) {
     console.error('❌ Database initialization error:', error);
+    // Не бросаем ошибку дальше, чтобы приложение могло работать
+    console.log('⚠️  Application will continue with limited functionality');
   }
 }
 
@@ -268,6 +271,8 @@ io.on('connection', (socket) => {
               socket.emit('queue_stats', {
                   pendingReports: parseInt(result.rows[0].pending_count)
               });
+          }).catch(err => {
+              console.error('❌ Error getting queue stats:', err);
           });
       }
   });
@@ -297,7 +302,7 @@ io.on('connection', (socket) => {
     pool.query(
       'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
       ['online', Date.now(), userId]
-    ).catch(console.error);
+    ).catch(err => console.error('❌ Error updating user status:', err));
     
     // Уведомляем всех о новом онлайн пользователе
     socket.broadcast.emit('user_online', userId);
@@ -355,7 +360,7 @@ io.on('connection', (socket) => {
         pool.query(
           'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
           ['offline', Date.now(), userId]
-        ).catch(console.error);
+        ).catch(err => console.error('❌ Error updating user status:', err));
         
         // Уведомляем всех о offline пользователе
         socket.broadcast.emit('user_offline', userId);
@@ -407,8 +412,7 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
 
     console.log('📞 Formatted phone:', formattedPhone);
 
-    const client = await db.getClient();
-    const result = await client.query(
+    const result = await pool.query(
       'SELECT user_id, username, display_name, phone, role, status, is_premium, auth_level FROM users WHERE phone = $1',
       [formattedPhone]
     );
@@ -1037,18 +1041,18 @@ app.post('/api/groups', async (req, res) => {
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [groupId, name, description, createdBy, Date.now()]
     );
-    
+
     // Добавляем создателя как администратора
     await pool.query(
       'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3)',
       [groupId, createdBy, 'admin']
     );
-    
+
     const group = result.rows[0];
     group.members = {
       [createdBy]: 'admin'
     };
-    
+
     console.log('✅ Группа создана:', group.name);
     res.status(201).json(group);
   } catch (error) {
@@ -1057,8 +1061,116 @@ app.post('/api/groups', async (req, res) => {
   }
 });
 
+// Добавить пользователя в группу
+app.post('/api/groups/:groupId/members', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, role = 'member' } = req.body;
+
+    console.log('👥 Добавление пользователя в группу:', { groupId, userId, role });
+
+    const result = await pool.query(
+      'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3) RETURNING *',
+      [groupId, userId, role]
+    );
+
+    console.log('✅ Пользователь добавлен в группу');
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('❌ Ошибка добавления пользователя в группу:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Получить группы пользователя
+app.get('/api/users/:userId/groups', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const result = await pool.query(
+      `SELECT g.*, gm.role 
+       FROM groups g
+       JOIN group_members gm ON g.id = gm.group_id
+       WHERE gm.user_id = $1
+       ORDER BY g.created_at DESC`,
+      [userId]
+    );
+
+    console.log(`✅ Найдено групп для пользователя ${userId}: ${result.rows.length}`);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Ошибка получения групп пользователя:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================== 🎯 ОСНОВНЫЕ ЭНДПОИНТЫ ====================
+
+// Корневой эндпоинт
+app.get('/', (req, res) => {
+  res.json({
+    message: '🚀 Messenger Backend API',
+    version: '1.0.0',
+    status: 'running',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: '/api/auth',
+      users: '/api/users',
+      chats: '/api/chats',
+      messages: '/api/messages',
+      groups: '/api/groups',
+      moderation: '/api/moderation',
+      security: '/api/security'
+    }
+  });
+});
+
+// Health check
+app.get('/health', async (req, res) => {
+  try {
+    // Проверяем подключение к базе данных
+    await pool.query('SELECT 1');
+    
+    res.json({
+      status: 'healthy',
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'unhealthy',
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Обработка 404
+app.use('*', (req, res) => {
+  res.status(404).json({
+    error: 'Endpoint not found',
+    path: req.originalUrl,
+    method: req.method
+  });
+});
+
+// Глобальный обработчик ошибок
+app.use((error, req, res, next) => {
+  console.error('🔥 Global error handler:', error);
+  res.status(500).json({
+    error: 'Internal server error',
+    message: error.message
+  });
+});
+
 // Инициализируем базу при запуске
-initializeDatabase();
+initializeDatabase().then(() => {
+  console.log('✅ Database initialization completed');
+}).catch(error => {
+  console.error('❌ Database initialization failed:', error);
+});
 
 // Запуск сервера
 server.listen(port, '0.0.0.0', () => {
@@ -1068,5 +1180,8 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`🔐 Auth endpoints: /api/auth/register, /api/auth/multi-level-login`);
   console.log(`💬 Chat endpoints: /api/chats, /api/messages, /api/messages/send`);
   console.log(`👥 Group endpoints: /api/groups, /api/groups/:id`);
+  console.log(`🛡️ Moderation endpoints: /api/moderation/*`);
+  console.log(`🔒 Security endpoints: /api/security/*`);
   console.log(`⏰ Started at: ${new Date().toISOString()}`);
+  console.log(`🌐 Health check: http://localhost:${port}/health`);
 });
