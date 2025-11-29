@@ -75,12 +75,22 @@ class AuthController {
         }
     }
 
-    async register(req, res) {
+        async register(req, res) {
         const client = await db.getClient();
         try {
-            const { phone, displayName, username, role = 'user' } = req.body;
+            // 🔥 ИСПРАВЛЕННОЕ ПОЛУЧЕНИЕ ДАННЫХ
+            const phone = req.body.phone || req.body.username; // используем username как phone если phone не пришел
+            const displayName = req.body.displayName || req.body.display_name;
+            const username = req.body.username || phone; // используем phone как username
+            const role = req.body.role || 'user';
 
-            console.log('🆕 Registration request:', { phone, displayName, username, role });
+            console.log('🆕 Registration request:', { 
+                phone, 
+                displayName, 
+                username, 
+                role,
+                rawBody: req.body // 🔥 ДЛЯ ДИАГНОСТИКИ
+            });
 
             if (!phone) {
                 return res.status(400).json({ 
@@ -105,12 +115,12 @@ class AuthController {
             // Автогенерация данных если не указаны
             const timestamp = Date.now();
             const userId = 'user_' + timestamp;
-            const generatedUsername = username || "user_" + timestamp;
+            const generatedUsername = username;
             const generatedDisplayName = displayName || "User " + phone.slice(-4);
             const userRole = role;
             const authLevel = 'sms_only';
 
-            // Сохраняем в PostgreSQL
+            // 🔥 СОХРАНЯЕМ phone (ВАЖНО!)
             const result = await client.query(
                 `INSERT INTO users (
                     user_id, phone, username, display_name, 
@@ -119,27 +129,26 @@ class AuthController {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                     userId, 
-                    phone, 
+                    phone,  // 🔥 СОХРАНЯЕМ phone
                     generatedUsername, 
                     generatedDisplayName,
                     userRole,
-                    false,              // is_premium
-                    false,              // is_banned
-                    0,                  // warnings
+                    false,
+                    false,
+                    0,
                     authLevel,
-                    'offline',          // status
-                    Date.now()          // last_seen
+                    'offline',
+                    Date.now()
                 ]
             );
 
             const newUser = result.rows[0];
             console.log('✅ User registered:', { 
                 id: newUser.user_id, 
-                phone: newUser.phone, 
-                role: newUser.role 
+                phone: newUser.phone,  // 🔥 ДОЛЖЕН БЫТЬ +79991234567
+                username: newUser.username 
             });
 
-            // 🔥 ПРАВИЛЬНЫЙ ВЫЗОВ
             await UserSecurity.findOrCreate({
                 userId: newUser.user_id  
             });
