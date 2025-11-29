@@ -370,6 +370,51 @@ io.on('connection', (socket) => {
   });
 });
 
+// 🔥 ДОБАВЬТЕ ЭТОТ ENDPOINT В server.js
+app.get('/api/users/phone/:phone', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        console.log('🔍 Searching user by phone:', phone);
+
+        const result = await pool.query(
+            'SELECT * FROM users WHERE phone = $1',
+            [phone]
+        );
+        
+        if (result.rows.length === 0) {
+            console.log('❌ User not found for phone:', phone);
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+        
+        const user = result.rows[0];
+        console.log('✅ User found:', user.user_id);
+
+        res.json({
+            success: true,
+            user: {
+                id: user.user_id,
+                username: user.username,
+                displayName: user.display_name,
+                phone: user.phone,
+                role: user.role,
+                status: user.status,
+                is_premium: user.is_premium,
+                authLevel: user.auth_level
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching user by phone:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Internal server error: ' + error.message 
+        });
+    }
+});
+
 // 👥 Пользователи
 app.get('/api/users', async (req, res) => {
   console.log('📨 GET /api/users - Request received');
