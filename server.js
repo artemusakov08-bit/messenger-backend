@@ -759,6 +759,79 @@ app.get('/api/moderation/templates', async (req, res) => {
     }
 });
 
+app.put('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { display_name, username, bio, phone } = req.body;
+
+        console.log('📝 Updating profile for user:', userId, { display_name, username, bio, phone });
+
+        // Проверяем существует ли пользователь
+        const userCheck = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [userId]
+        );
+
+        if (userCheck.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        // Проверяем уникальность username (если изменился)
+        if (username && username !== userCheck.rows[0].username) {
+            const usernameCheck = await pool.query(
+                'SELECT * FROM users WHERE username = $1 AND user_id != $2',
+                [username, userId]
+            );
+
+            if (usernameCheck.rows.length > 0) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Имя пользователя уже занято' 
+                });
+            }
+        }
+
+        // Проверяем уникальность phone (если изменился)
+        if (phone && phone !== userCheck.rows[0].phone) {
+            const phoneCheck = await pool.query(
+                'SELECT * FROM users WHERE phone = $1 AND user_id != $2',
+                [phone, userId]
+            );
+
+            if (phoneCheck.rows.length > 0) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Номер телефона уже используется' 
+                });
+            }
+        }
+
+        // Обновляем профиль
+        const result = await pool.query(
+            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
+            [display_name, username, bio, phone, userId]
+        );
+
+        const updatedUser = result.rows[0];
+        console.log('✅ Profile updated successfully:', updatedUser.user_id);
+
+        res.json({
+            success: true,
+            user: updatedUser
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating profile:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка обновления профиля: ' + error.message 
+        });
+    }
+});
+
 // Создать шаблонный ответ
 app.post('/api/moderation/templates', async (req, res) => {
     try {
