@@ -18,7 +18,7 @@ class UserSecurity {
         }
     }
 
-    // 🔍 Найти или создать настройки безопасности (ПОЛНОСТЬЮ ПЕРЕПИСАННЫЙ МЕТОД)
+    // 🔍 Найти или создать настройки безопасности
     static async findOrCreate(conditions) {
         const client = await pool.connect();
         try {
@@ -33,11 +33,11 @@ class UserSecurity {
             );
             
             if (findResult.rows.length > 0) {
-                console.log('✅ Security settings found, returning existing');
+                console.log('✅ Security settings found');
                 return [findResult.rows[0], false];
             }
             
-            // Создаем новую запись с безопасностью
+            // Создаем новую запись
             const securityId = 'sec_' + Date.now();
             const insertResult = await client.query(
                 `INSERT INTO user_security (
@@ -56,12 +56,9 @@ class UserSecurity {
                 ]
             );
             
-            console.log('✅ New security settings created for user:', userId);
+            console.log('✅ New security settings created');
             return [insertResult.rows[0], true];
             
-        } catch (error) {
-            console.error('❌ UserSecurity.findOrCreate error:', error);
-            throw error;
         } finally {
             client.release();
         }
