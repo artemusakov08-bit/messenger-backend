@@ -696,6 +696,8 @@ function autoModerateMessage(text, senderId) {
     return violations;
 }
 
+app.post('/api/auth/login', authController.verifyCodeAndLogin);
+
 // Эндпоинт для проверки сообщения
 app.post('/api/moderation/scan-message', async (req, res) => {
     try {
