@@ -33,8 +33,7 @@ class AuthController {
 
                 console.log('✅ User found:', { 
                     userId: user.user_id, 
-                    hasSecurity: !!securitySettings,
-                    twoFAEnabled: securitySettings?.two_fa_enabled 
+                    hasSecurity: !!securitySettings
                 });
 
                 res.json({
@@ -182,6 +181,51 @@ class AuthController {
         }
     }
 
+    async sendVerificationCode(req, res) {
+        try {
+            const { phone, type = 'sms' } = req.body;
+
+            console.log('📱 Sending verification code:', { phone, type });
+
+            if (!phone) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Телефон обязателен' 
+                });
+            }
+
+            // Генерируем случайный 6-значный код
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            
+            // Сохраняем код в базу
+            await VerificationCode.create({
+                phone: phone,
+                code: code,
+                type: type,
+                expiresInMinutes: 10
+            });
+
+            console.log('✅ Verification code generated:', { phone, code });
+
+            // В реальном приложении здесь будет отправка SMS
+            // await sendSMS(phone, `Ваш код подтверждения: ${code}`);
+
+            res.json({
+                success: true,
+                message: 'Код подтверждения отправлен',
+                code: code, // Только для разработки, в продакшене убрать
+                expiresIn: 10 // минут
+            });
+
+        } catch (error) {
+            console.error('❌ Send verification code error:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка отправки кода: ' + error.message 
+            });
+        }
+    }
+
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
@@ -198,7 +242,7 @@ class AuthController {
 
             // Проверяем код
             const verificationCode = await VerificationCode.findOne({
-                phone, code, type
+                where: { phone, code, type }
             });
 
             if (!verificationCode) {
@@ -240,9 +284,9 @@ class AuthController {
 
             const user = userResult.rows[0];
 
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
+            // Получаем настройки безопасности
             const securitySettings = await UserSecurity.findOne({
-                userId: user.user_id
+                where: { userId: user.user_id }
             });
 
             // Обновляем статус пользователя
@@ -307,9 +351,9 @@ class AuthController {
                 });
             }
 
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
+            // Получаем настройки безопасности
             const securitySettings = await UserSecurity.findOne({
-                userId: userId
+                where: { userId: userId }
             });
 
             if (!securitySettings || !securitySettings.two_fa_enabled) {
@@ -319,7 +363,8 @@ class AuthController {
                 });
             }
 
-            // Проверяем код 2FA
+            // Проверяем код 2FA (упрощенная версия)
+            // В реальности здесь будет проверка через speakeasy
             const isValid2FACode = await this.validate2FACode(securitySettings.two_fa_secret, code);
 
             if (!isValid2FACode) {
@@ -358,6 +403,8 @@ class AuthController {
     }
 
     async validate2FACode(secret, code) {
+        // Упрощенная проверка 2FA кода
+        // В реальности здесь будет интеграция с speakeasy
         try {
             const speakeasy = require('speakeasy');
             return speakeasy.totp.verify({
@@ -368,6 +415,7 @@ class AuthController {
             });
         } catch (error) {
             console.error('2FA validation error:', error);
+            // Fallback: проверяем что код состоит из 6 цифр
             return /^\d{6}$/.test(code);
         }
     }
@@ -391,10 +439,8 @@ class AuthController {
             }
 
             const user = userResult.rows[0];
-            
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
             const securitySettings = await UserSecurity.findOne({
-                userId: user.user_id
+                where: { userId: user.user_id }
             });
 
             // Определяем требования в зависимости от роли и настроек безопасности
@@ -447,10 +493,8 @@ class AuthController {
             }
 
             const user = userResult.rows[0];
-            
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
             const securitySettings = await UserSecurity.findOne({
-                userId: user.user_id
+                where: { userId: user.user_id }
             });
 
             res.json({
@@ -486,8 +530,8 @@ class AuthController {
         }
     }
 
-    // Очистка просроченных кодов
-    async cleanExpiredCodes(req, res) {
+    // Очистка просроченных кодов (можно запускать по cron)
+    async cleanExpiredCodes(req, res) {ы
         try {
             const deletedCount = await VerificationCode.cleanExpiredCodes();
             
