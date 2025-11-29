@@ -4,6 +4,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
 const http = require('http');
+const authController = require('./controllers/authController');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
