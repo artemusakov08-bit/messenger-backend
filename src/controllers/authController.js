@@ -26,7 +26,6 @@ class AuthController {
             if (userResult.rows.length > 0) {
                 const user = userResult.rows[0];
                 
-                // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
                 const securitySettings = await UserSecurity.findOne({ 
                     userId: user.user_id 
                 });
@@ -75,21 +74,16 @@ class AuthController {
         }
     }
 
-        async register(req, res) {
+    async register(req, res) {
         const client = await db.getClient();
         try {
-            // 🔥 ИСПРАВЛЕННОЕ ПОЛУЧЕНИЕ ДАННЫХ
-            const phone = req.body.phone || req.body.username; // используем username как phone если phone не пришел
-            const displayName = req.body.displayName || req.body.display_name;
-            const username = req.body.username || phone; // используем phone как username
-            const role = req.body.role || 'user';
+            const { phone, displayName, username, role = 'user' } = req.body;
 
             console.log('🆕 Registration request:', { 
                 phone, 
                 displayName, 
                 username, 
-                role,
-                rawBody: req.body // 🔥 ДЛЯ ДИАГНОСТИКИ
+                role
             });
 
             if (!phone) {
@@ -115,12 +109,11 @@ class AuthController {
             // Автогенерация данных если не указаны
             const timestamp = Date.now();
             const userId = 'user_' + timestamp;
-            const generatedUsername = username;
+            const generatedUsername = username || phone;
             const generatedDisplayName = displayName || "User " + phone.slice(-4);
             const userRole = role;
             const authLevel = 'sms_only';
 
-            // 🔥 СОХРАНЯЕМ phone (ВАЖНО!)
             const result = await client.query(
                 `INSERT INTO users (
                     user_id, phone, username, display_name, 
@@ -129,7 +122,7 @@ class AuthController {
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
                 [
                     userId, 
-                    phone,  // 🔥 СОХРАНЯЕМ phone
+                    phone,
                     generatedUsername, 
                     generatedDisplayName,
                     userRole,
@@ -145,7 +138,7 @@ class AuthController {
             const newUser = result.rows[0];
             console.log('✅ User registered:', { 
                 id: newUser.user_id, 
-                phone: newUser.phone,  // 🔥 ДОЛЖЕН БЫТЬ +79991234567
+                phone: newUser.phone,  
                 username: newUser.username 
             });
 
@@ -190,16 +183,13 @@ class AuthController {
         }
     }
 
-        async sendVerificationCode(req, res) {
+    async sendVerificationCode(req, res) {
         try {
-            const { phone, username, type = 'sms' } = req.body;
+            const { phone, type = 'sms' } = req.body;
 
-            console.log('📱 Sending verification code:', { phone, username, type });
+            console.log('📱 Sending verification code:', { phone, type });
 
-            // 🔥 ИСПРАВЛЕНИЕ: используем phone или username
-            const userPhone = phone || username;
-            
-            if (!userPhone) {
+            if (!phone) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Телефон обязателен' 
@@ -211,16 +201,13 @@ class AuthController {
             
             // Сохраняем код в базу
             await VerificationCode.create({
-                phone: userPhone,
+                phone: phone,
                 code: code,
                 type: type,
                 expiresInMinutes: 10
             });
 
-            console.log('✅ Verification code generated:', { phone: userPhone, code });
-
-            // В реальном приложении здесь будет отправка SMS
-            // await sendSMS(userPhone, `Ваш код подтверждения: ${code}`);
+            console.log('✅ Verification code generated:', { phone, code });
 
             res.json({
                 success: true,
@@ -241,25 +228,29 @@ class AuthController {
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
-            const { phone, username, code, type = 'sms' } = req.body;
+            const { phone, code, type = 'sms' } = req.body;
 
-            console.log('🔐 Verifying code and login:', { phone, username, code, type });
+            console.log('🔐 Verifying code and login:', { phone, code, type });
 
-            // 🔥 ИСПРАВЛЕНИЕ: используем phone или username
-            const userPhone = phone || username;
-            
-            if (!userPhone || !code) {
+            if (!phone) {
                 return res.status(400).json({ 
                     success: false,
-                    error: 'Телефон и код обязательны' 
+                    error: 'Телефон обязателен' 
                 });
             }
 
-            console.log('📞 Using phone for verification:', userPhone);
+            if (!code) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Код подтверждения обязателен' 
+                });
+            }
+
+            console.log('📞 Using phone for verification:', phone);
 
             // Проверяем код
             const verificationCode = await VerificationCode.findOne({
-                where: { phone: userPhone, code, type }
+                where: { phone: phone, code, type }
             });
 
             if (!verificationCode) {
@@ -289,7 +280,7 @@ class AuthController {
             // Находим пользователя по телефону
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
-                [userPhone]
+                [phone]
             );
             
             if (userResult.rows.length === 0) {
@@ -384,8 +375,7 @@ class AuthController {
                 });
             }
 
-            // Проверяем код 2FA (упрощенная версия)
-            // В реальности здесь будет проверка через speakeasy
+            // Проверяем код 2FA
             const isValid2FACode = await this.validate2FACode(securitySettings.two_fa_secret, code);
 
             if (!isValid2FACode) {
@@ -424,8 +414,6 @@ class AuthController {
     }
 
     async validate2FACode(secret, code) {
-        // Упрощенная проверка 2FA кода
-        // В реальности здесь будет интеграция с speakeasy
         try {
             const speakeasy = require('speakeasy');
             return speakeasy.totp.verify({
@@ -436,7 +424,6 @@ class AuthController {
             });
         } catch (error) {
             console.error('2FA validation error:', error);
-            // Fallback: проверяем что код состоит из 6 цифр
             return /^\d{6}$/.test(code);
         }
     }
@@ -464,7 +451,6 @@ class AuthController {
                 where: { userId: user.user_id }
             });
 
-            // Определяем требования в зависимости от роли и настроек безопасности
             let requirements = ['sms'];
             
             if (securitySettings?.two_fa_enabled) {
@@ -551,7 +537,6 @@ class AuthController {
         }
     }
 
-    // Очистка просроченных кодов (можно запускать по cron)
     async cleanExpiredCodes(req, res) {
         try {
             const deletedCount = await VerificationCode.cleanExpiredCodes();
