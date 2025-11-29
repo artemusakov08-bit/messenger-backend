@@ -2,7 +2,6 @@
 CREATE TABLE IF NOT EXISTS users (
     user_id VARCHAR(50) PRIMARY KEY,
     username VARCHAR(255) UNIQUE NOT NULL,
-    email VARCHAR(255),
     display_name VARCHAR(255),
     status VARCHAR(20) DEFAULT 'offline',
     custom_status VARCHAR(255) DEFAULT 'В сети',

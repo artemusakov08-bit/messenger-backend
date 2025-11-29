@@ -17,18 +17,31 @@ class AuthController {
                 });
             }
 
-            // Проверяем существующего пользователя
+            // Находим пользователя по телефону
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
                 [phone]
             );
 
-            if (userResult.rows.length > 0) {
-                const user = userResult.rows[0];
-                
-                const securitySettings = await UserSecurity.findOne({ 
-                    userId: user.user_id 
+            if (userResult.rows.length === 0) {
+                // 🔥 ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН - возвращаем специальный статус
+                console.log('🆕 User not found, needs registration:', phone);
+                return res.status(200).json({ 
+                    success: false,
+                    needsRegistration: true,  // ← КЛЮЧЕВОЕ ПОЛЕ
+                    error: 'Пользователь не найден. Требуется регистрация.' 
                 });
+            }
+
+            if (userResult.rows.length === 0) {
+                // 🔥 ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН - возвращаем специальный статус
+                console.log('🆕 User not found, needs registration:', phone);
+                return res.status(200).json({ 
+                    success: false,
+                    needsRegistration: true,  
+                    error: 'Пользователь не найден. Требуется регистрация.' 
+                });
+            }
 
                 console.log('✅ User found:', { 
                     userId: user.user_id, 
@@ -53,16 +66,6 @@ class AuthController {
                         securityLevel: securitySettings?.security_level || 'low'
                     }
                 });
-
-            } else {
-                console.log('🆕 User not found, offering registration');
-                res.json({
-                    success: true,
-                    userExists: false,
-                    message: 'Пользователь не найден. Требуется регистрация.'
-                });
-            }
-
         } catch (error) {
             console.error('❌ Check user registration error:', error);
             res.status(500).json({ 
@@ -489,7 +492,6 @@ class AuthController {
         const client = await db.getClient();
         try {
             const { userId } = req.params;
-
             const userResult = await client.query(
                 'SELECT * FROM users WHERE user_id = $1',
                 [userId]

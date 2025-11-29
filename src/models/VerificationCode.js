@@ -3,20 +3,31 @@ const pool = require('../config/database');
 class VerificationCode {
     // 🔍 Найти действительный код
     static async findOne(conditions) {
-        const client = await pool.connect();
-        try {
-            const { phone, code, type = 'sms' } = conditions;
-            const result = await client.query(
-                `SELECT * FROM verification_codes 
-                 WHERE phone = $1 AND code = $2 AND type = $3 
-                 AND is_used = false AND expires_at > $4`,
-                [phone, code, type, new Date()]
-            );
-            return result.rows[0] || null;
-        } finally {
-            client.release();
+    const client = await pool.connect();
+    try {
+        const { phone, code, type = 'sms' } = conditions;
+        
+        console.log('🔍 Searching code in DB:', { phone, code, type });
+        
+        const result = await client.query(
+            `SELECT * FROM verification_codes 
+             WHERE phone = $1 AND code = $2 AND type = $3 
+             AND is_used = false AND expires_at > $4`,
+            [phone, code, type, new Date()]
+        );
+        
+        console.log('📊 Found codes:', result.rows.length);
+        if (result.rows.length > 0) {
+            console.log('✅ Code found:', result.rows[0]);
+        } else {
+            console.log('❌ Code not found or expired');
         }
+        
+        return result.rows[0] || null;
+    } finally {
+        client.release();
     }
+}
 
     // ➕ Создать новый код
     static async create(codeData) {
