@@ -540,7 +540,7 @@ class AuthController {
     }
 
     // Очистка просроченных кодов (можно запускать по cron)
-    async cleanExpiredCodes(req, res) {ы
+    async cleanExpiredCodes(req, res) {
         try {
             const deletedCount = await VerificationCode.cleanExpiredCodes();
             
