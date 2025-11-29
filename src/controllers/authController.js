@@ -190,13 +190,16 @@ class AuthController {
         }
     }
 
-    async sendVerificationCode(req, res) {
+        async sendVerificationCode(req, res) {
         try {
-            const { phone, type = 'sms' } = req.body;
+            const { phone, username, type = 'sms' } = req.body;
 
-            console.log('📱 Sending verification code:', { phone, type });
+            console.log('📱 Sending verification code:', { phone, username, type });
 
-            if (!phone) {
+            // 🔥 ИСПРАВЛЕНИЕ: используем phone или username
+            const userPhone = phone || username;
+            
+            if (!userPhone) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Телефон обязателен' 
@@ -208,16 +211,16 @@ class AuthController {
             
             // Сохраняем код в базу
             await VerificationCode.create({
-                phone: phone,
+                phone: userPhone,
                 code: code,
                 type: type,
                 expiresInMinutes: 10
             });
 
-            console.log('✅ Verification code generated:', { phone, code });
+            console.log('✅ Verification code generated:', { phone: userPhone, code });
 
             // В реальном приложении здесь будет отправка SMS
-            // await sendSMS(phone, `Ваш код подтверждения: ${code}`);
+            // await sendSMS(userPhone, `Ваш код подтверждения: ${code}`);
 
             res.json({
                 success: true,
@@ -238,20 +241,25 @@ class AuthController {
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
-            const { phone, code, type = 'sms' } = req.body;
+            const { phone, username, code, type = 'sms' } = req.body;
 
-            console.log('🔐 Verifying code and login:', { phone, code, type });
+            console.log('🔐 Verifying code and login:', { phone, username, code, type });
 
-            if (!phone || !code) {
+            // 🔥 ИСПРАВЛЕНИЕ: используем phone или username
+            const userPhone = phone || username;
+            
+            if (!userPhone || !code) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Телефон и код обязательны' 
                 });
             }
 
+            console.log('📞 Using phone for verification:', userPhone);
+
             // Проверяем код
             const verificationCode = await VerificationCode.findOne({
-                where: { phone, code, type }
+                where: { phone: userPhone, code, type }
             });
 
             if (!verificationCode) {
@@ -278,10 +286,10 @@ class AuthController {
             // Помечаем код как использованный
             await verificationCode.markAsUsed();
 
-            // Находим пользователя
+            // Находим пользователя по телефону
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
-                [phone]
+                [userPhone]
             );
             
             if (userResult.rows.length === 0) {
@@ -315,7 +323,11 @@ class AuthController {
                 { expiresIn: '24h' }
             );
 
-            console.log('✅ Login successful:', { userId: user.user_id, role: user.role });
+            console.log('✅ Login successful:', { 
+                userId: user.user_id, 
+                phone: user.phone,
+                role: user.role 
+            });
 
             res.json({
                 success: true,
