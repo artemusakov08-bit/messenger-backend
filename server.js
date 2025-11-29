@@ -832,6 +832,60 @@ app.put('/api/users/:userId', async (req, res) => {
     }
 });
 
+// Модель для хранения звонков в базе
+app.get('/api/calls/history/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const result = await pool.query(
+            `SELECT * FROM calls 
+             WHERE from_user_id = $1 OR to_user_id = $1 
+             ORDER BY created_at DESC 
+             LIMIT 50`,
+            [userId]
+        );
+
+        console.log('📞 Call history loaded for user:', userId, 'calls:', result.rows.length);
+        
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error('❌ Error loading call history:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка загрузки истории звонков' 
+        });
+    }
+});
+
+app.post('/api/calls/start', async (req, res) => {
+    try {
+        const { fromUserId, toUserId, callType } = req.body;
+        
+        const callId = 'call_' + Date.now();
+        
+        const result = await pool.query(
+            `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, created_at) 
+             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+            [callId, fromUserId, toUserId, callType, 'initiated', new Date()]
+        );
+
+        console.log('📞 Call started:', callId);
+        
+        res.json({
+            success: true,
+            call: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error('❌ Error starting call:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка начала звонка' 
+        });
+    }
+});
+
 // Создать шаблонный ответ
 app.post('/api/moderation/templates', async (req, res) => {
     try {

@@ -488,7 +488,7 @@ class AuthController {
         }
     }
 
-    async getUserById(req, res) {
+    async getUserById(req, res) {   
         const client = await db.getClient();
         try {
             const { userId } = req.params;

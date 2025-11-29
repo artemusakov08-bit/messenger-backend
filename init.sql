@@ -12,6 +12,17 @@ CREATE TABLE IF NOT EXISTS users (
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
 );
 
+CREATE TABLE IF NOT EXISTS calls (
+    id VARCHAR(50) PRIMARY KEY,
+    from_user_id VARCHAR(50) NOT NULL,
+    to_user_id VARCHAR(50) NOT NULL,
+    call_type VARCHAR(20) DEFAULT 'voice',
+    status VARCHAR(20) DEFAULT 'initiated',
+    duration INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT NOW(),
+    ended_at TIMESTAMP
+);
+
 -- Создание таблицы чатов
 CREATE TABLE IF NOT EXISTS chats (
     id VARCHAR(50) PRIMARY KEY,
