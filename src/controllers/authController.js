@@ -248,34 +248,37 @@ class AuthController {
 
             console.log('📞 Using phone for verification:', phone);
 
-            // Проверяем код
+            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
             const verificationCode = await VerificationCode.findOne({
-                where: { phone: phone, code, type }
+                phone: phone, 
+                code: code, 
+                type: type
             });
 
             if (!verificationCode) {
+                console.log('❌ Code not found or expired for phone:', phone);
                 return res.status(400).json({ 
                     success: false,
                     error: 'Неверный код подтверждения' 
                 });
             }
 
-            if (verificationCode.isUsed) {
+            if (verificationCode.is_used) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Код уже использован' 
                 });
             }
 
-            if (new Date() > verificationCode.expiresAt) {
+            if (new Date() > verificationCode.expires_at) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Код истек' 
                 });
             }
 
-            // Помечаем код как использованный
-            await verificationCode.markAsUsed();
+            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
+            await VerificationCode.markAsUsed(verificationCode.id);
 
             // Находим пользователя по телефону
             const userResult = await client.query(
