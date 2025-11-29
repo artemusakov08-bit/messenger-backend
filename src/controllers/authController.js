@@ -140,13 +140,8 @@ class AuthController {
                 role: newUser.role 
             });
 
-            // Создаем настройки безопасности по умолчанию
             await UserSecurity.findOrCreate({
-                where: { userId: newUser.user_id },
-                defaults: { 
-                    userId: newUser.user_id,
-                    securityLevel: 'low'
-                }
+                userId: newUser.user_id  
             });
 
             // Генерируем временный токен для завершения регистрации
