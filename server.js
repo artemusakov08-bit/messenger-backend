@@ -858,10 +858,66 @@ app.get('/api/calls/history/:userId', async (req, res) => {
     }
 });
 
+// ==================== 📞 СИСТЕМА ЗВОНКОВ ====================
+
+// Эндпоинт для получения истории звонков
+app.get('/api/calls/history/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        console.log('📞 Loading call history for user:', userId);
+
+        const result = await pool.query(
+            `SELECT c.*, 
+                    u1.display_name as from_user_name,
+                    u2.display_name as to_user_name
+             FROM calls c
+             LEFT JOIN users u1 ON c.from_user_id = u1.user_id
+             LEFT JOIN users u2 ON c.to_user_id = u2.user_id
+             WHERE c.from_user_id = $1 OR c.to_user_id = $1 
+             ORDER BY c.created_at DESC 
+             LIMIT 50`,
+            [userId]
+        );
+
+        console.log('✅ Call history loaded:', result.rows.length, 'calls');
+        
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error('❌ Error loading call history:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка загрузки истории звонков: ' + error.message 
+        });
+    }
+});
+
+// Эндпоинт для начала звонка
 app.post('/api/calls/start', async (req, res) => {
     try {
-        const { fromUserId, toUserId, callType } = req.body;
+        const { fromUserId, toUserId, callType = 'voice' } = req.body;
         
+        console.log('📞 Starting call:', { fromUserId, toUserId, callType });
+
+        // Проверяем существование пользователей
+        const fromUser = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [fromUserId]
+        );
+        
+        const toUser = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [toUserId]
+        );
+
+        if (fromUser.rows.length === 0 || toUser.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
         const callId = 'call_' + Date.now();
         
         const result = await pool.query(
@@ -870,18 +926,66 @@ app.post('/api/calls/start', async (req, res) => {
             [callId, fromUserId, toUserId, callType, 'initiated', new Date()]
         );
 
-        console.log('📞 Call started:', callId);
+        const call = result.rows[0];
+        console.log('✅ Call started successfully:', callId);
         
+        // Отправляем уведомление через WebSocket
+        io.emit('call_started', {
+            callId: call.id,
+            fromUserId: call.from_user_id,
+            toUserId: call.to_user_id,
+            callType: call.call_type,
+            fromUserName: fromUser.rows[0].display_name
+        });
+
         res.json({
             success: true,
-            call: result.rows[0]
+            call: call
         });
 
     } catch (error) {
         console.error('❌ Error starting call:', error);
         res.status(500).json({ 
             success: false,
-            error: 'Ошибка начала звонка' 
+            error: 'Ошибка начала звонка: ' + error.message 
+        });
+    }
+});
+
+// Эндпоинт для завершения звонка
+app.post('/api/calls/end', async (req, res) => {
+    try {
+        const { callId, duration = 0 } = req.body;
+        
+        console.log('📞 Ending call:', { callId, duration });
+
+        const result = await pool.query(
+            `UPDATE calls 
+             SET status = 'ended', duration = $1, ended_at = $2 
+             WHERE id = $3 RETURNING *`,
+            [duration, new Date(), callId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Звонок не найден' 
+            });
+        }
+
+        const call = result.rows[0];
+        console.log('✅ Call ended successfully:', callId);
+        
+        res.json({
+            success: true,
+            call: call
+        });
+
+    } catch (error) {
+        console.error('❌ Error ending call:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка завершения звонка: ' + error.message 
         });
     }
 });
