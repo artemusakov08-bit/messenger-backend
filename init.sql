@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS users (
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
 );
 
+ALTER TABLE users ADD COLUMN message_notifications BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN call_notifications BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN notification_sound BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN online_status BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN read_receipts BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN settings_updated_at TIMESTAMP;
+
 CREATE TABLE IF NOT EXISTS calls (
     id VARCHAR(50) PRIMARY KEY,
     from_user_id VARCHAR(50) NOT NULL,

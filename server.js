@@ -990,6 +990,116 @@ app.post('/api/calls/end', async (req, res) => {
     }
 });
 
+// ==================== ⚙️ СИСТЕМА НАСТРОЕК ====================
+
+// Эндпоинт для обновления настроек пользователя
+app.put('/api/users/:userId/settings', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { 
+            messageNotifications = true, 
+            callNotifications = true, 
+            notificationSound = true, 
+            onlineStatus = true, 
+            readReceipts = true 
+        } = req.body;
+
+        console.log('⚙️ Updating settings for user:', userId, { 
+            messageNotifications, callNotifications, notificationSound, onlineStatus, readReceipts 
+        });
+
+        // Проверяем существование пользователя
+        const userCheck = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [userId]
+        );
+
+        if (userCheck.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        // Обновляем настройки в базе
+        const result = await pool.query(
+            `UPDATE users SET 
+                message_notifications = $1,
+                call_notifications = $2, 
+                notification_sound = $3,
+                online_status = $4,
+                read_receipts = $5,
+                settings_updated_at = $6
+             WHERE user_id = $7 RETURNING *`,
+            [messageNotifications, callNotifications, notificationSound, onlineStatus, readReceipts, new Date(), userId]
+        );
+
+        const updatedUser = result.rows[0];
+        console.log('✅ Settings updated for user:', userId);
+        
+        res.json({
+            success: true,
+            message: 'Настройки успешно обновлены',
+            user: {
+                message_notifications: updatedUser.message_notifications,
+                call_notifications: updatedUser.call_notifications,
+                notification_sound: updatedUser.notification_sound,
+                online_status: updatedUser.online_status,
+                read_receipts: updatedUser.read_receipts
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating settings:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка обновления настроек: ' + error.message 
+        });
+    }
+});
+
+// Эндпоинт для получения настроек пользователя
+app.get('/api/users/:userId/settings', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        console.log('⚙️ Getting settings for user:', userId);
+
+        const result = await pool.query(
+            `SELECT 
+                message_notifications,
+                call_notifications,
+                notification_sound, 
+                online_status,
+                read_receipts,
+                settings_updated_at
+             FROM users WHERE user_id = $1`,
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        const settings = result.rows[0];
+        console.log('✅ Settings loaded for user:', userId);
+        
+        res.json({
+            success: true,
+            settings: settings
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting settings:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка получения настроек: ' + error.message 
+        });
+    }
+});
 // Создать шаблонный ответ
 app.post('/api/moderation/templates', async (req, res) => {
     try {
