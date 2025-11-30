@@ -1,3 +1,4 @@
+// /app/src/controllers/authController.js
 const db = require('../config/database');
 const jwt = require('jsonwebtoken');
 const { UserSecurity, VerificationCode } = require('../models');
@@ -24,48 +25,42 @@ class AuthController {
             );
 
             if (userResult.rows.length === 0) {
-                // 🔥 ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН - возвращаем специальный статус
                 console.log('🆕 User not found, needs registration:', phone);
                 return res.status(200).json({ 
                     success: false,
-                    needsRegistration: true,  // ← КЛЮЧЕВОЕ ПОЛЕ
+                    needsRegistration: true,
                     error: 'Пользователь не найден. Требуется регистрация.' 
                 });
             }
 
-            if (userResult.rows.length === 0) {
-                // 🔥 ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН - возвращаем специальный статус
-                console.log('🆕 User not found, needs registration:', phone);
-                return res.status(200).json({ 
-                    success: false,
-                    needsRegistration: true,  
-                    error: 'Пользователь не найден. Требуется регистрация.' 
-                });
-            }
+            const user = userResult.rows[0];
 
-                console.log('✅ User found:', { 
-                    userId: user.user_id, 
-                    hasSecurity: !!securitySettings
-                });
+            // Получаем настройки безопасности через PostgreSQL
+            const securitySettings = await UserSecurity.findByUserId(user.user_id);
 
-                res.json({
-                    success: true,
-                    userExists: true,
-                    user: {
-                        id: user.user_id,
-                        phone: user.phone,
-                        username: user.username,
-                        displayName: user.display_name,
-                        role: user.role,
-                        is_premium: user.is_premium,
-                        authLevel: user.auth_level
-                    },
-                    security: {
-                        twoFAEnabled: securitySettings?.two_fa_enabled || false,
-                        codeWordEnabled: securitySettings?.code_word_enabled || false,
-                        securityLevel: securitySettings?.security_level || 'low'
-                    }
-                });
+            console.log('✅ User found:', { 
+                userId: user.user_id, 
+                hasSecurity: !!securitySettings
+            });
+
+            res.json({
+                success: true,
+                userExists: true,
+                user: {
+                    id: user.user_id,
+                    phone: user.phone,
+                    username: user.username,
+                    displayName: user.display_name,
+                    role: user.role,
+                    is_premium: user.is_premium,
+                    authLevel: user.auth_level
+                },
+                security: {
+                    twoFAEnabled: securitySettings?.two_fa_enabled || false,
+                    codeWordEnabled: securitySettings?.code_word_enabled || false,
+                    securityLevel: securitySettings?.security_level || 'low'
+                }
+            });
         } catch (error) {
             console.error('❌ Check user registration error:', error);
             res.status(500).json({ 
@@ -145,9 +140,8 @@ class AuthController {
                 username: newUser.username 
             });
 
-            await UserSecurity.findOrCreate({
-                userId: newUser.user_id  
-            });
+            // Создаем настройки безопасности через PostgreSQL
+            await UserSecurity.createOrUpdate(newUser.user_id);
 
             // Генерируем временный токен для завершения регистрации
             const tempToken = jwt.sign(
@@ -186,48 +180,6 @@ class AuthController {
         }
     }
 
-    async sendVerificationCode(req, res) {
-        try {
-            const { phone, type = 'sms' } = req.body;
-
-            console.log('📱 Sending verification code:', { phone, type });
-
-            if (!phone) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Телефон обязателен' 
-                });
-            }
-
-            // Генерируем случайный 6-значный код
-            const code = Math.floor(100000 + Math.random() * 900000).toString();
-            
-            // Сохраняем код в базу
-            await VerificationCode.create({
-                phone: phone,
-                code: code,
-                type: type,
-                expiresInMinutes: 10
-            });
-
-            console.log('✅ Verification code generated:', { phone, code });
-
-            res.json({
-                success: true,
-                message: 'Код подтверждения отправлен',
-                code: code, // Только для разработки, в продакшене убрать
-                expiresIn: 10 // минут
-            });
-
-        } catch (error) {
-            console.error('❌ Send verification code error:', error);
-            res.status(500).json({ 
-                success: false,
-                error: 'Ошибка отправки кода: ' + error.message 
-            });
-        }
-    }
-
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
@@ -251,12 +203,8 @@ class AuthController {
 
             console.log('📞 Using phone for verification:', phone);
 
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
-            const verificationCode = await VerificationCode.findOne({
-                phone: phone, 
-                code: code, 
-                type: type
-            });
+            // Проверяем код через PostgreSQL
+            const verificationCode = await VerificationCode.findValidCode(phone, code, type);
 
             if (!verificationCode) {
                 console.log('❌ Code not found or expired for phone:', phone);
@@ -266,21 +214,7 @@ class AuthController {
                 });
             }
 
-            if (verificationCode.is_used) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Код уже использован' 
-                });
-            }
-
-            if (new Date() > verificationCode.expires_at) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Код истек' 
-                });
-            }
-
-            // 🔥 ИСПРАВЛЕННЫЙ ВЫЗОВ
+            // Помечаем код как использованный
             await VerificationCode.markAsUsed(verificationCode.id);
 
             // Находим пользователя по телефону
@@ -298,10 +232,8 @@ class AuthController {
 
             const user = userResult.rows[0];
 
-            // Получаем настройки безопасности
-            const securitySettings = await UserSecurity.findOne({
-                where: { userId: user.user_id }
-            });
+            // Получаем настройки безопасности через PostgreSQL
+            const securitySettings = await UserSecurity.findByUserId(user.user_id);
 
             // Обновляем статус пользователя
             await client.query(
@@ -355,7 +287,6 @@ class AuthController {
             client.release();
         }
     }
-
     async verify2FACode(req, res) {
         try {
             const { userId, code } = req.body;
