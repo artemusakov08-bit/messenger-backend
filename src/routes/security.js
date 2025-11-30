@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/authMiddleware');
 const SecurityService = require('../services/security/SecurityAuditService');
 const TwoFAService = require('../services/security/TwoFAService');
+const UserSecurity = require('../models/UserSecurity');
 
 // 🔐 Получить настройки безопасности пользователя
 router.get('/settings', auth, (req, res) => {
