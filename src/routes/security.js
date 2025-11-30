@@ -7,7 +7,7 @@ const TwoFAService = require('../services/security/TwoFAService');
 const UserSecurity = require('../models/UserSecurity');
 
 // 🔐 Получить настройки безопасности пользователя
-router.get('/settings', authenticate, (req, res) => {
+router.get('/settings', auth, (req, res) => {
     const userId = req.user.id;
     
     UserSecurity.findOne({ userId })
