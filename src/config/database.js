@@ -101,4 +101,4 @@ class Database {
 }
 
 const database = new Database();
-module.exports = database;
+module.exports = database;  

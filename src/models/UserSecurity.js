@@ -151,35 +151,6 @@ class UserSecurity {
             throw error;
         }
     }
-
-    // Обновить уровень безопасности
-    static async updateSecurityLevel(userId) {
-        try {
-            const security = await this.findByUserId(userId);
-            if (!security) return null;
-
-            let score = 25;
-            if (security.two_fa_enabled) score += 30;
-            if (security.code_word_enabled) score += 20;
-            
-            let level = 'низкий';
-            if (score >= 80) level = 'максимальный';
-            else if (score >= 60) level = 'высокий';
-            else if (score >= 40) level = 'средний';
-
-            const result = await db.query(
-                `UPDATE user_security SET 
-                    security_level = $1,
-                    last_security_update = $2
-                 WHERE user_id = $3 RETURNING *`,
-                [level, Date.now(), userId]
-            );
-            return result.rows[0];
-        } catch (error) {
-            console.error('❌ Error updating security level:', error);
-            throw error;
-        }
-    }
 }
 
-module.exports = UserSecurity;
+module.exports = UserSecurity;  
