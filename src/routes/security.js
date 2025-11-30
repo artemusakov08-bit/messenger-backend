@@ -5,43 +5,41 @@ const SecurityService = require('../services/security/SecurityAuditService');
 const TwoFAService = require('../services/security/TwoFAService');
 
 // 🔐 Получить настройки безопасности пользователя
-router.get('/settings', auth, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        
-        const securitySettings = await UserSecurity.findOne({ userId });
-        
-        if (!securitySettings) {
-            // Создаем дефолтные настройки
-            const defaultSettings = new UserSecurity({
-                userId,
-                twoFAEnabled: false,
-                codeWordEnabled: false,
-                codeWordHint: '',
-                trustedDevices: [],
-                securityLevel: 'низкий',
-                securityScore: 25,
-                additionalPasswordsCount: 0,
-                lastUpdated: Date.now()
-            });
-            await defaultSettings.save();
-            return res.json({
+router.get('/settings', auth, (req, res) => {
+    const userId = req.user.id;
+    
+    UserSecurity.findOne({ userId })
+        .then(securitySettings => {
+            if (!securitySettings) {
+                // Создаем дефолтные настройки
+                const defaultSettings = new UserSecurity({
+                    userId,
+                    twoFAEnabled: false,
+                    codeWordEnabled: false,
+                    codeWordHint: '',
+                    trustedDevices: [],
+                    securityLevel: 'низкий',
+                    securityScore: 25,
+                    additionalPasswordsCount: 0,
+                    lastUpdated: Date.now()
+                });
+                return defaultSettings.save();
+            }
+            return securitySettings;
+        })
+        .then(settings => {
+            res.json({
                 success: true,
-                data: defaultSettings
+                data: settings
             });
-        }
-
-        res.json({
-            success: true,
-            data: securitySettings
+        })
+        .catch(error => {
+            console.error('❌ Security settings error:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка получения настроек безопасности'
+            });
         });
-    } catch (error) {
-        console.error('❌ Security settings error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Ошибка получения настроек безопасности'
-        });
-    }
 });
 
 // 🔄 Сгенерировать секрет для 2FA
