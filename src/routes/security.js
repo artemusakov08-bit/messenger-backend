@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/authMiddleware');
+const authMiddleware = require('../middleware/authMiddleware');
+const auth = authMiddleware.authenticate; // используем конкретный метод
 const SecurityService = require('../services/security/SecurityAuditService');
 const TwoFAService = require('../services/security/TwoFAService');
 const UserSecurity = require('../models/UserSecurity');
 
 // 🔐 Получить настройки безопасности пользователя
-router.get('/settings', auth, (req, res) => {
+router.get('/settings', authenticate, (req, res) => {
     const userId = req.user.id;
     
     UserSecurity.findOne({ userId })
