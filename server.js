@@ -45,7 +45,7 @@ app.use((req, res, next) => {
 app.use('/api/auth', authRoutes);
 const securityRoutes = require('./src/routes/security');
 app.use('/api/security', securityRoutes);
-app.use('/api/security', require('./routes/security'));
+app.use('/api/security', require('./src/routes/security'));
 
 // Подключение к PostgreSQL
 const pool = new Pool({
