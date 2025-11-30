@@ -1,38 +1,254 @@
 const express = require('express');
 const router = express.Router();
-const authMiddleware = require('../middleware/authMiddleware');
-const securityController = require('../controllers/securityController');
+const auth = require('../middleware/auth');
+const SecurityService = require('../services/security/SecurityAuditService');
+const TwoFAService = require('../services/security/TwoFAService');
 
-// Применяем аутентификацию ко всем маршрутам
-router.use(authMiddleware.authenticate);
+// 🔐 Получить настройки безопасности пользователя
+router.get('/settings', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const securitySettings = await UserSecurity.findOne({ userId });
+        
+        if (!securitySettings) {
+            // Создаем дефолтные настройки
+            const defaultSettings = new UserSecurity({
+                userId,
+                twoFAEnabled: false,
+                codeWordEnabled: false,
+                codeWordHint: '',
+                trustedDevices: [],
+                securityLevel: 'низкий',
+                securityScore: 25,
+                additionalPasswordsCount: 0,
+                lastUpdated: Date.now()
+            });
+            await defaultSettings.save();
+            return res.json({
+                success: true,
+                data: defaultSettings
+            });
+        }
 
-// 🔐 Получить настройки безопасности
-router.get('/settings', (req, res) => {
-  securityController.getSecuritySettings(req, res);
+        res.json({
+            success: true,
+            data: securitySettings
+        });
+    } catch (error) {
+        console.error('❌ Security settings error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения настроек безопасности'
+        });
+    }
 });
 
-// 🔄 2FA Routes
-router.post('/2fa/generate', (req, res) => {
-  securityController.generate2FASecret(req, res);
+// 🔄 Сгенерировать секрет для 2FA
+router.post('/2fa/generate', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const secret = TwoFAService.generateSecret();
+        const qrCodeUrl = TwoFAService.generateQRCode(secret, req.user.email);
+        
+        // Сохраняем временный секрет
+        await UserSecurity.findOneAndUpdate(
+            { userId },
+            { 
+                twoFATempSecret: secret,
+                twoFATempSecretExpires: Date.now() + 10 * 60 * 1000 // 10 минут
+            },
+            { upsert: true, new: true }
+        );
+
+        res.json({
+            success: true,
+            data: {
+                secret: secret,
+                qrCodeUrl: qrCodeUrl,
+                backupCodes: TwoFAService.generateBackupCodes()
+            }
+        });
+    } catch (error) {
+        console.error('❌ 2FA generate error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка генерации 2FA'
+        });
+    }
 });
 
-router.post('/2fa/enable', (req, res) => {
-  securityController.enable2FA(req, res);
+// ✅ Включить 2FA
+router.post('/2fa/enable', auth, async (req, res) => {
+    try {
+        const { secret, code } = req.body;
+        const userId = req.user.id;
+
+        // Проверяем код
+        const isValid = TwoFAService.verifyCode(secret, code);
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                error: 'Неверный код подтверждения'
+            });
+        }
+
+        // Активируем 2FA
+        await UserSecurity.findOneAndUpdate(
+            { userId },
+            { 
+                twoFAEnabled: true,
+                twoFASecret: secret,
+                twoFATempSecret: null,
+                twoFATempSecretExpires: null,
+                securityLevel: 'высокий',
+                securityScore: 75,
+                lastUpdated: Date.now()
+            },
+            { upsert: true, new: true }
+        );
+
+        // Логируем действие
+        await SecurityService.logSecurityAction(
+            userId,
+            '2FA_ENABLED',
+            'Включена двухфакторная аутентификация'
+        );
+
+        res.json({
+            success: true,
+            data: '2FA успешно включена'
+        });
+    } catch (error) {
+        console.error('❌ 2FA enable error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка включения 2FA'
+        });
+    }
 });
 
-// 🗣️ Code Word Routes
-router.post('/codeword/set', (req, res) => {
-  securityController.setCodeWord(req, res);
+// 🔴 Отключить 2FA
+router.delete('/2fa/disable', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        await UserSecurity.findOneAndUpdate(
+            { userId },
+            { 
+                twoFAEnabled: false,
+                twoFASecret: null,
+                securityLevel: 'средний',
+                securityScore: 50,
+                lastUpdated: Date.now()
+            }
+        );
+
+        // Логируем действие
+        await SecurityService.logSecurityAction(
+            userId,
+            '2FA_DISABLED',
+            'Отключена двухфакторная аутентификация'
+        );
+
+        res.json({
+            success: true,
+            data: '2FA успешно отключена'
+        });
+    } catch (error) {
+        console.error('❌ 2FA disable error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка отключения 2FA'
+        });
+    }
 });
 
-// 🔑 Additional Passwords Routes
-router.post('/passwords/add', (req, res) => {
-  securityController.addAdditionalPassword(req, res);
+// 🗣️ Установить кодовое слово
+router.post('/codeword', auth, async (req, res) => {
+    try {
+        const { codeWord, hint } = req.body;
+        const userId = req.user.id;
+
+        if (!codeWord || codeWord.length < 4) {
+            return res.status(400).json({
+                success: false,
+                error: 'Кодовое слово должно быть не менее 4 символов'
+            });
+        }
+
+        // Хешируем кодовое слово
+        const hashedCodeWord = await SecurityService.hashCodeWord(codeWord);
+
+        await UserSecurity.findOneAndUpdate(
+            { userId },
+            { 
+                codeWordEnabled: true,
+                codeWordHash: hashedCodeWord,
+                codeWordHint: hint || '',
+                securityLevel: 'средний',
+                securityScore: 60,
+                lastUpdated: Date.now()
+            },
+            { upsert: true, new: true }
+        );
+
+        // Логируем действие
+        await SecurityService.logSecurityAction(
+            userId,
+            'CODE_WORD_SET',
+            'Установлено кодовое слово'
+        );
+
+        res.json({
+            success: true,
+            data: 'Кодовое слово успешно установлено'
+        });
+    } catch (error) {
+        console.error('❌ Code word set error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка установки кодового слова'
+        });
+    }
 });
 
-// 🛡️ Security Verification for sensitive operations
-router.post('/verify/:operation', (req, res) => {
-  securityController.verifySecurity(req, res);
+// 🔴 Удалить кодовое слово
+router.delete('/codeword', auth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        await UserSecurity.findOneAndUpdate(
+            { userId },
+            { 
+                codeWordEnabled: false,
+                codeWordHash: null,
+                codeWordHint: '',
+                securityLevel: 'низкий',
+                securityScore: 30,
+                lastUpdated: Date.now()
+            }
+        );
+
+        // Логируем действие
+        await SecurityService.logSecurityAction(
+            userId,
+            'CODE_WORD_REMOVED',
+            'Удалено кодовое слово'
+        );
+
+        res.json({
+            success: true,
+            data: 'Кодовое слово успешно удалено'
+        });
+    } catch (error) {
+        console.error('❌ Code word remove error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка удаления кодового слова'
+        });
+    }
 });
 
 module.exports = router;
