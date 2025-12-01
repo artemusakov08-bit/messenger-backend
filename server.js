@@ -170,6 +170,22 @@ async function initializeDatabase() {
       )
     `);
 
+    // Таблица для звонков
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS calls (
+        id TEXT PRIMARY KEY,
+        from_user_id TEXT NOT NULL,
+        to_user_id TEXT NOT NULL,
+        call_type TEXT DEFAULT 'voice',
+        status TEXT DEFAULT 'initiated',
+        duration INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT NOW(),
+        ended_at TIMESTAMP,
+        FOREIGN KEY (from_user_id) REFERENCES users(user_id),
+        FOREIGN KEY (to_user_id) REFERENCES users(user_id)
+      )
+    `);
+
     // 🆕 ТАБЛИЦЫ ДЛЯ МОДЕРАЦИИ
     console.log('🔄 Creating moderation tables...');
     
@@ -295,6 +311,203 @@ io.on('connection', (socket) => {
       }
   });
 
+  // 📞 Обработчики звонков
+  socket.on('start_call', async (callData) => {
+    try {
+      const { fromUserId, toUserId, callType = 'voice' } = callData;
+      
+      console.log('📞 Starting call via WebSocket:', { fromUserId, toUserId, callType });
+
+      // Проверяем существование пользователей
+      const fromUser = await pool.query(
+        'SELECT * FROM users WHERE user_id = $1',
+        [fromUserId]
+      );
+      
+      const toUser = await pool.query(
+        'SELECT * FROM users WHERE user_id = $1',
+        [toUserId]
+      );
+
+      if (fromUser.rows.length === 0 || toUser.rows.length === 0) {
+        socket.emit('call_error', { error: 'Пользователь не найден' });
+        return;
+      }
+
+      const callId = 'call_' + Date.now();
+      
+      // Сохраняем звонок в базу
+      const result = await pool.query(
+        `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, created_at) 
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [callId, fromUserId, toUserId, callType, 'ringing', new Date()]
+      );
+
+      const call = result.rows[0];
+      
+      // Отправляем уведомление целевому пользователю
+      const targetSocketId = connectedUsers.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('incoming_call', {
+          callId: call.id,
+          fromUserId: call.from_user_id,
+          fromUserName: fromUser.rows[0].display_name,
+          callType: call.call_type
+        });
+      }
+
+      // Отправляем подтверждение инициатору
+      socket.emit('call_started', {
+        callId: call.id,
+        status: 'ringing'
+      });
+
+      console.log('✅ Call initiated:', callId);
+
+    } catch (error) {
+      console.error('❌ WebSocket call error:', error);
+      socket.emit('call_error', { error: 'Ошибка начала звонка' });
+    }
+  });
+
+  // 📞 Принять звонок
+  socket.on('accept_call', async (callData) => {
+    try {
+      const { callId } = callData;
+      
+      console.log('✅ Accepting call:', callId);
+
+      // Обновляем статус звонка
+      const result = await pool.query(
+        `UPDATE calls SET status = 'active' WHERE id = $1 RETURNING *`,
+        [callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
+        return;
+      }
+
+      const call = result.rows[0];
+      
+      // Уведомляем обоих пользователей
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      const toSocketId = connectedUsers.get(call.to_user_id);
+      
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_accepted', { callId: call.id });
+      }
+      if (toSocketId) {
+        io.to(toSocketId).emit('call_accepted', { callId: call.id });
+      }
+
+      console.log('✅ Call accepted:', callId);
+
+    } catch (error) {
+      console.error('❌ Accept call error:', error);
+      socket.emit('call_error', { error: 'Ошибка принятия звонка' });
+    }
+  });
+
+  // 📞 Отклонить звонок
+  socket.on('reject_call', async (callData) => {
+    try {
+      const { callId } = callData;
+      
+      console.log('❌ Rejecting call:', callId);
+
+      // Обновляем статус звонка
+      const result = await pool.query(
+        `UPDATE calls SET status = 'rejected' WHERE id = $1 RETURNING *`,
+        [callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
+        return;
+      }
+
+      const call = result.rows[0];
+      
+      // Уведомляем инициатора
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_rejected', { callId: call.id });
+      }
+
+      console.log('✅ Call rejected:', callId);
+
+    } catch (error) {
+      console.error('❌ Reject call error:', error);
+      socket.emit('call_error', { error: 'Ошибка отклонения звонка' });
+    }
+  });
+
+  // 📞 Завершить звонок
+  socket.on('end_call', async (callData) => {
+    try {
+      const { callId, duration = 0 } = callData;
+      
+      console.log('📞 Ending call:', { callId, duration });
+
+      const result = await pool.query(
+        `UPDATE calls 
+        SET status = 'ended', duration = $1, ended_at = $2 
+        WHERE id = $3 RETURNING *`,
+        [duration, new Date(), callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
+        return;
+      }
+
+      const call = result.rows[0];
+      
+      // Уведомляем обоих пользователей
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      const toSocketId = connectedUsers.get(call.to_user_id);
+      
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_ended', { callId: call.id, duration });
+      }
+      if (toSocketId) {
+        io.to(toSocketId).emit('call_ended', { callId: call.id, duration });
+      }
+
+      console.log('✅ Call ended:', callId);
+
+    } catch (error) {
+      console.error('❌ End call error:', error);
+      socket.emit('call_error', { error: 'Ошибка завершения звонка' });
+    }
+  });
+
+  // 🔄 WebRTC сигналинг для видео/аудио звонков
+  socket.on('webrtc_offer', (data) => {
+    const { targetUserId, offer, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_offer', { offer, callId, fromUserId: socket.userId });
+    }
+  });
+
+  socket.on('webrtc_answer', (data) => {
+    const { targetUserId, answer, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_answer', { answer, callId });
+    }
+  });
+
+  socket.on('webrtc_ice_candidate', (data) => {
+    const { targetUserId, candidate, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_ice_candidate', { candidate, callId });
+    }
+  });
+
   // Регистрация пользователя
   socket.on('user_connected', (userId) => {
     connectedUsers.set(userId, socket.id);
@@ -312,32 +525,50 @@ io.on('connection', (socket) => {
 
   // Отправка сообщения через WebSocket
   socket.on('send_message', async (messageData) => {
-    try {
-        console.log('💬 WebSocket сообщение получено:', messageData); 
-        
-        const { chatId, text, senderId, senderName, type = 'text' } = messageData;
+  try {
+    console.log('💬 WebSocket сообщение получено:', messageData); 
+    
+    const { chatId, text, senderId, senderName, type = 'text', targetUserId } = messageData;
 
-        // Сохраняем в базу
-        const messageId = 'msg_' + Date.now();
-        const result = await pool.query(
-            `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-            [messageId, chatId, text, senderId, senderName, Date.now(), type]
-        );
+    // Если chatId не указан, но есть targetUserId - создаем chatId
+    let finalChatId = chatId;
+    if (!chatId && targetUserId) {
+      finalChatId = [senderId, targetUserId].sort().join('_');
+    }
 
-        const savedMessage = result.rows[0];
-        
-        console.log('✅ Сообщение сохранено в БД:', savedMessage);
-        console.log('📤 Отправляю всем клиентам...');
-        
-        // Отправляем сообщение ВСЕМ подключенным клиентам
-        io.emit('new_message', savedMessage);
-        
-        console.log('✅ Сообщение отправлено всем клиентам');
+    if (!finalChatId) {
+      socket.emit('message_error', { error: 'Не указан chatId или targetUserId' });
+      return;
+    }
+
+    // Сохраняем в базу
+    const messageId = 'msg_' + Date.now();
+    const result = await pool.query(
+      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [messageId, finalChatId, text, senderId, senderName, Date.now(), type]
+    );
+
+    const savedMessage = result.rows[0];
+    
+    console.log('✅ Сообщение сохранено в БД:', savedMessage);
+    
+    // Отправляем сообщение в конкретный чат, а не всем
+    io.to(finalChatId).emit('new_message', savedMessage);
+    
+    // Также отправляем уведомление конкретному пользователю если он онлайн
+    if (targetUserId) {
+      const targetSocketId = connectedUsers.get(targetUserId);
+      if (targetSocketId && !socket.rooms.has(finalChatId)) {
+        socket.to(targetSocketId).emit('new_message_notification', savedMessage);
+      }
+    }
+    
+    console.log('✅ Сообщение отправлено в чат:', finalChatId);
 
     } catch (error) {
-        console.error('❌ Ошибка отправки сообщения:', error);
-        socket.emit('message_error', { error: 'Failed to send message' });
+      console.error('❌ Ошибка отправки сообщения:', error);
+      socket.emit('message_error', { error: 'Failed to send message' });
     }
   });
 
@@ -372,7 +603,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// 🔥 ДОБАВЬТЕ ЭТОТ ENDPOINT В server.js
 app.get('/api/users/phone/:phone', async (req, res) => {
     try {
         const { phone } = req.params;
@@ -498,19 +728,147 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
   }
 });
 
-app.get('/api/test-db', async (req, res) => {
+// 🔍 Найти пользователя для чата по телефону
+app.get('/api/chat/find-user/:phone', async (req, res) => {
   try {
-    console.log('🔧 Testing database connection...');
-    const result = await pool.query('SELECT NOW() as time');
-    res.json({ 
-      success: true, 
-      message: 'Database connected',
-      time: result.rows[0].time 
+    const { phone } = req.params;
+    
+    console.log('🔍 Finding user for chat by phone:', phone);
+
+    const result = await pool.query(
+      'SELECT user_id, display_name, phone, status FROM users WHERE phone = $1',
+      [phone]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Пользователь не найден' 
+      });
+    }
+    
+    const user = result.rows[0];
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.user_id,
+        displayName: user.display_name,
+        phone: user.phone,
+        status: user.status
+      }
     });
+    
   } catch (error) {
-    res.json({ 
-      success: false, 
-      error: 'Database error: ' + error.message 
+    console.error('❌ Error finding user for chat:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Ошибка поиска пользователя' 
+    });
+  }
+});
+
+// 💬 Получить или создать приватный чат
+app.post('/api/chat/private', async (req, res) => {
+  try {
+    const { userId1, userId2 } = req.body;
+    
+    console.log('💬 Getting/Creating private chat:', { userId1, userId2 });
+
+    // Создаем уникальный ID чата
+    const chatId = [userId1, userId2].sort().join('_');
+    
+    // Проверяем существование пользователей
+    const user1 = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId1]);
+    const user2 = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId2]);
+    
+    if (user1.rows.length === 0 || user2.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Пользователь не найден' 
+      });
+    }
+
+    // Получаем историю сообщений
+    const messagesResult = await pool.query(
+      `SELECT * FROM messages 
+       WHERE chat_id = $1 
+       ORDER BY timestamp ASC 
+       LIMIT 100`,
+      [chatId]
+    );
+
+    res.json({
+      success: true,
+      chatId: chatId,
+      user1: {
+        id: user1.rows[0].user_id,
+        displayName: user1.rows[0].display_name
+      },
+      user2: {
+        id: user2.rows[0].user_id,
+        displayName: user2.rows[0].display_name
+      },
+      messages: messagesResult.rows,
+      messageCount: messagesResult.rows.length
+    });
+    
+  } catch (error) {
+    console.error('❌ Error getting private chat:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Ошибка получения чата' 
+    });
+  }
+});
+
+// 👥 Получить список чатов пользователя
+app.get('/api/chats/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    console.log('💬 Getting user chats:', userId);
+
+    const result = await pool.query(
+      `SELECT DISTINCT 
+          m.chat_id,
+          CASE 
+            WHEN u1.user_id = $1 THEN u2.display_name
+            ELSE u1.display_name
+          END as chat_name,
+          CASE 
+            WHEN u1.user_id = $1 THEN u2.user_id
+            ELSE u1.user_id
+          END as other_user_id,
+          MAX(m.timestamp) as last_message_time,
+          (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message,
+          (SELECT COUNT(*) FROM messages WHERE chat_id = m.chat_id AND timestamp > (
+            SELECT COALESCE(MAX(last_read), 0) FROM user_chat_status WHERE user_id = $1 AND chat_id = m.chat_id
+          )) as unread_count
+       FROM messages m
+       LEFT JOIN users u1 ON u1.user_id = m.sender_id
+       LEFT JOIN users u2 ON u2.user_id != m.sender_id AND u2.user_id IN (
+         SELECT UNNEST(STRING_TO_ARRAY(REPLACE(m.chat_id, $1, ''), '_')) as user_id
+         WHERE user_id != ''
+       )
+       WHERE m.chat_id LIKE $2 OR m.chat_id LIKE $3
+       GROUP BY m.chat_id, u1.user_id, u2.user_id, u1.display_name, u2.display_name
+       ORDER BY last_message_time DESC`,
+      [userId, `%${userId}%`, `${userId}_%`, `%_${userId}`]
+    );
+
+    console.log(`✅ Found ${result.rows.length} chats for user ${userId}`);
+    
+    res.json({
+      success: true,
+      chats: result.rows
+    });
+    
+  } catch (error) {
+    console.error('❌ Error getting user chats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Ошибка получения чатов' 
     });
   }
 });
