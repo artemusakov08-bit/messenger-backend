@@ -9,6 +9,9 @@ const authController = require('./src/controllers/authController');
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
 const db = require('./src/config/database');
+const chatRoutes = require('./src/routes/chat');
+const callRoutes = require('./src/routes/call');
+const messageRoutes = require('./src/routes/message');
 
 const app = express();
 const server = http.createServer(app);
@@ -46,6 +49,9 @@ app.use('/api/auth', authRoutes);
 const securityRoutes = require('./src/routes/security');
 app.use('/api/security', securityRoutes);
 app.use('/api/security', require('./src/routes/security'));
+app.use('/api/chat', chatRoutes);
+app.use('/api/call', callRoutes);
+app.use('/api/message', messageRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -523,8 +529,8 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('user_online', userId);
   });
 
-  // Отправка сообщения через WebSocket
-  socket.on('send_message', async (messageData) => {
+// Отправка сообщения через WebSocket
+socket.on('send_message', async (messageData) => {
   try {
     console.log('💬 WebSocket сообщение получено:', messageData); 
     
@@ -541,36 +547,51 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Сохраняем в базу
-    const messageId = 'msg_' + Date.now();
-    const result = await pool.query(
-      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [messageId, finalChatId, text, senderId, senderName, Date.now(), type]
-    );
-
-    const savedMessage = result.rows[0];
+    // Сохраняем в базу через messageController
+    const messageController = require('./src/controllers/messageController');
     
-    console.log('✅ Сообщение сохранено в БД:', savedMessage);
-    
-    // Отправляем сообщение в конкретный чат, а не всем
-    io.to(finalChatId).emit('new_message', savedMessage);
-    
-    // Также отправляем уведомление конкретному пользователю если он онлайн
-    if (targetUserId) {
-      const targetSocketId = connectedUsers.get(targetUserId);
-      if (targetSocketId && !socket.rooms.has(finalChatId)) {
-        socket.to(targetSocketId).emit('new_message_notification', savedMessage);
+    // Создаем фиктивный req/res объекты для вызова контроллера
+    const mockReq = {
+      body: {
+        chatId: finalChatId,
+        text: text,
+        senderId: senderId,
+        senderName: senderName,
+        type: type
       }
-    }
+    };
     
-    console.log('✅ Сообщение отправлено в чат:', finalChatId);
+    const mockRes = {
+      json: function(data) {
+        // Когда сообщение сохранено в базу
+        console.log('✅ Сообщение сохранено в БД через контроллер:', data);
+        
+        // Отправляем сообщение в конкретный чат
+        io.to(finalChatId).emit('new_message', data);
+        
+        // Также отправляем уведомление конкретному пользователю если он онлайн
+        if (targetUserId) {
+          const targetSocketId = connectedUsers.get(targetUserId);
+          if (targetSocketId && !socket.rooms.has(finalChatId)) {
+            socket.to(targetSocketId).emit('new_message_notification', data);
+          }
+        }
+        
+        console.log('✅ Сообщение отправлено в чат:', finalChatId);
+      },
+      status: function(code) {
+        return this;
+      }
+    };
 
-    } catch (error) {
-      console.error('❌ Ошибка отправки сообщения:', error);
-      socket.emit('message_error', { error: 'Failed to send message' });
-    }
-  });
+    // Вызываем контроллер
+    await messageController.sendMessage(mockReq, mockRes);
+
+  } catch (error) {
+    console.error('❌ Ошибка отправки сообщения через WebSocket:', error);
+    socket.emit('message_error', { error: 'Failed to send message' });
+  }
+});
 
   socket.on('join_chat', (chatId) => {
     socket.join(chatId);
@@ -768,111 +789,6 @@ app.get('/api/chat/find-user/:phone', async (req, res) => {
   }
 });
 
-// 💬 Получить или создать приватный чат
-app.post('/api/chat/private', async (req, res) => {
-  try {
-    const { userId1, userId2 } = req.body;
-    
-    console.log('💬 Getting/Creating private chat:', { userId1, userId2 });
-
-    // Создаем уникальный ID чата
-    const chatId = [userId1, userId2].sort().join('_');
-    
-    // Проверяем существование пользователей
-    const user1 = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId1]);
-    const user2 = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId2]);
-    
-    if (user1.rows.length === 0 || user2.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Пользователь не найден' 
-      });
-    }
-
-    // Получаем историю сообщений
-    const messagesResult = await pool.query(
-      `SELECT * FROM messages 
-       WHERE chat_id = $1 
-       ORDER BY timestamp ASC 
-       LIMIT 100`,
-      [chatId]
-    );
-
-    res.json({
-      success: true,
-      chatId: chatId,
-      user1: {
-        id: user1.rows[0].user_id,
-        displayName: user1.rows[0].display_name
-      },
-      user2: {
-        id: user2.rows[0].user_id,
-        displayName: user2.rows[0].display_name
-      },
-      messages: messagesResult.rows,
-      messageCount: messagesResult.rows.length
-    });
-    
-  } catch (error) {
-    console.error('❌ Error getting private chat:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Ошибка получения чата' 
-    });
-  }
-});
-
-// 👥 Получить список чатов пользователя
-app.get('/api/chats/user/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    
-    console.log('💬 Getting user chats:', userId);
-
-    const result = await pool.query(
-      `SELECT DISTINCT 
-          m.chat_id,
-          CASE 
-            WHEN u1.user_id = $1 THEN u2.display_name
-            ELSE u1.display_name
-          END as chat_name,
-          CASE 
-            WHEN u1.user_id = $1 THEN u2.user_id
-            ELSE u1.user_id
-          END as other_user_id,
-          MAX(m.timestamp) as last_message_time,
-          (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message,
-          (SELECT COUNT(*) FROM messages WHERE chat_id = m.chat_id AND timestamp > (
-            SELECT COALESCE(MAX(last_read), 0) FROM user_chat_status WHERE user_id = $1 AND chat_id = m.chat_id
-          )) as unread_count
-       FROM messages m
-       LEFT JOIN users u1 ON u1.user_id = m.sender_id
-       LEFT JOIN users u2 ON u2.user_id != m.sender_id AND u2.user_id IN (
-         SELECT UNNEST(STRING_TO_ARRAY(REPLACE(m.chat_id, $1, ''), '_')) as user_id
-         WHERE user_id != ''
-       )
-       WHERE m.chat_id LIKE $2 OR m.chat_id LIKE $3
-       GROUP BY m.chat_id, u1.user_id, u2.user_id, u1.display_name, u2.display_name
-       ORDER BY last_message_time DESC`,
-      [userId, `%${userId}%`, `${userId}_%`, `%_${userId}`]
-    );
-
-    console.log(`✅ Found ${result.rows.length} chats for user ${userId}`);
-    
-    res.json({
-      success: true,
-      chats: result.rows
-    });
-    
-  } catch (error) {
-    console.error('❌ Error getting user chats:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Ошибка получения чатов' 
-    });
-  }
-});
-
 app.get('/api/users/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -917,101 +833,6 @@ app.get('/api/chats/:chatId/messages', async (req, res) => {
   }
 });
 
-// 📨 ОТПРАВКА СООБЩЕНИЙ - ОБА ЭНДПОИНТА
-app.post('/api/messages', async (req, res) => {
-  console.log('📨 POST /api/messages - Body:', req.body);
-  
-  try {
-    const { 
-      chatId, text, senderId, senderName, 
-      type = 'text'
-    } = req.body;
-
-    console.log('📝 Параметры:', { chatId, text, senderId, senderName });
-
-    // Проверка обязательных полей
-    if (!chatId || !text || !senderId || !senderName) {
-      console.log('❌ Отсутствуют обязательные поля');
-      return res.status(400).json({ 
-        error: 'Missing required fields: chatId, text, senderId, senderName' 
-      });
-    }
-
-    const messageId = 'msg_' + Date.now();
-    
-    console.log('💾 Сохраняем в базу...');
-    
-    const result = await pool.query(
-      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [messageId, chatId, text, senderId, senderName, Date.now(), type]
-    );
-
-    const savedMessage = result.rows[0];
-
-    console.log('✅ Сообщение сохранено:', { 
-      id: savedMessage.id, 
-      chatId: savedMessage.chat_id,
-      text: savedMessage.text 
-    });
-
-    // Отправляем сообщение через WebSocket всем подключенным клиентам
-    io.emit('new_message', savedMessage);
-    
-    res.json(savedMessage);
-  } catch (error) {
-    console.error('❌ Ошибка отправки сообщения:', error);
-    res.status(500).json({ error: 'Internal server error: ' + error.message });
-  }
-});
-
-// 🔧 ДОПОЛНИТЕЛЬНЫЙ ЭНДПОИНТ ДЛЯ ФРОНТЕНДА
-app.post('/api/messages/send', async (req, res) => {
-  console.log('📨 POST /api/messages/send - Body:', req.body);
-  
-  try {
-    const { 
-      chatId, text, senderId, senderName, 
-      type = 'text'
-    } = req.body;
-
-    console.log('📝 Параметры:', { chatId, text, senderId, senderName });
-
-    // Проверка обязательных полей
-    if (!chatId || !text || !senderId || !senderName) {
-      console.log('❌ Отсутствуют обязательные поля');
-      return res.status(400).json({ 
-        error: 'Missing required fields: chatId, text, senderId, senderName' 
-      });
-    }
-
-    const messageId = 'msg_' + Date.now();
-    
-    console.log('💾 Сохраняем в базу...');
-    
-    const result = await pool.query(
-      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [messageId, chatId, text, senderId, senderName, Date.now(), type]
-    );
-
-    const savedMessage = result.rows[0];
-
-    console.log('✅ Сообщение сохранено через /send:', { 
-      id: savedMessage.id, 
-      chatId: savedMessage.chat_id,
-      text: savedMessage.text 
-    });
-
-    // Отправляем сообщение через WebSocket всем подключенным клиентам
-    io.emit('new_message', savedMessage);
-    
-    res.json(savedMessage);
-  } catch (error) {
-    console.error('❌ Ошибка отправки сообщения через /send:', error);
-    res.status(500).json({ error: 'Internal server error: ' + error.message });
-  }
-});
 
 // ==================== 🤖 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ ====================
 
@@ -1213,138 +1034,6 @@ app.get('/api/calls/history/:userId', async (req, res) => {
         res.status(500).json({ 
             success: false,
             error: 'Ошибка загрузки истории звонков' 
-        });
-    }
-});
-
-// ==================== 📞 СИСТЕМА ЗВОНКОВ ====================
-
-// Эндпоинт для получения истории звонков
-app.get('/api/calls/history/:userId', async (req, res) => {
-    try {
-        const { userId } = req.params;
-        
-        console.log('📞 Loading call history for user:', userId);
-
-        const result = await pool.query(
-            `SELECT c.*, 
-                    u1.display_name as from_user_name,
-                    u2.display_name as to_user_name
-             FROM calls c
-             LEFT JOIN users u1 ON c.from_user_id = u1.user_id
-             LEFT JOIN users u2 ON c.to_user_id = u2.user_id
-             WHERE c.from_user_id = $1 OR c.to_user_id = $1 
-             ORDER BY c.created_at DESC 
-             LIMIT 50`,
-            [userId]
-        );
-
-        console.log('✅ Call history loaded:', result.rows.length, 'calls');
-        
-        res.json(result.rows);
-
-    } catch (error) {
-        console.error('❌ Error loading call history:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка загрузки истории звонков: ' + error.message 
-        });
-    }
-});
-
-// Эндпоинт для начала звонка
-app.post('/api/calls/start', async (req, res) => {
-    try {
-        const { fromUserId, toUserId, callType = 'voice' } = req.body;
-        
-        console.log('📞 Starting call:', { fromUserId, toUserId, callType });
-
-        // Проверяем существование пользователей
-        const fromUser = await pool.query(
-            'SELECT * FROM users WHERE user_id = $1',
-            [fromUserId]
-        );
-        
-        const toUser = await pool.query(
-            'SELECT * FROM users WHERE user_id = $1',
-            [toUserId]
-        );
-
-        if (fromUser.rows.length === 0 || toUser.rows.length === 0) {
-            return res.status(404).json({ 
-                success: false,
-                error: 'Пользователь не найден' 
-            });
-        }
-
-        const callId = 'call_' + Date.now();
-        
-        const result = await pool.query(
-            `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, created_at) 
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-            [callId, fromUserId, toUserId, callType, 'initiated', new Date()]
-        );
-
-        const call = result.rows[0];
-        console.log('✅ Call started successfully:', callId);
-        
-        // Отправляем уведомление через WebSocket
-        io.emit('call_started', {
-            callId: call.id,
-            fromUserId: call.from_user_id,
-            toUserId: call.to_user_id,
-            callType: call.call_type,
-            fromUserName: fromUser.rows[0].display_name
-        });
-
-        res.json({
-            success: true,
-            call: call
-        });
-
-    } catch (error) {
-        console.error('❌ Error starting call:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка начала звонка: ' + error.message 
-        });
-    }
-});
-
-// Эндпоинт для завершения звонка
-app.post('/api/calls/end', async (req, res) => {
-    try {
-        const { callId, duration = 0 } = req.body;
-        
-        console.log('📞 Ending call:', { callId, duration });
-
-        const result = await pool.query(
-            `UPDATE calls 
-             SET status = 'ended', duration = $1, ended_at = $2 
-             WHERE id = $3 RETURNING *`,
-            [duration, new Date(), callId]
-        );
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ 
-                success: false,
-                error: 'Звонок не найден' 
-            });
-        }
-
-        const call = result.rows[0];
-        console.log('✅ Call ended successfully:', callId);
-        
-        res.json({
-            success: true,
-            call: call
-        });
-
-    } catch (error) {
-        console.error('❌ Error ending call:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка завершения звонка: ' + error.message 
         });
     }
 });
