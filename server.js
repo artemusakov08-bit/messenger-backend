@@ -979,80 +979,59 @@ app.get('/api/moderation/templates', async (req, res) => {
     }
 });
 
+// ПРАВИЛЬНАЯ ПРОВЕРКА USERNAME:
 app.put('/api/users/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const { display_name, username, bio, phone } = req.body;
 
-        console.log('📝 Updating profile for user:', userId, { display_name, username, bio, phone });
+        console.log('✏️ Updating profile:', { userId, username });
 
-        // Проверяем существует ли пользователь
-        const userCheck = await pool.query(
-            'SELECT * FROM users WHERE user_id = $1',
+        // 🔥 ПРАВИЛЬНАЯ ПРОВЕРКА: 
+        // 1. Получаем текущий username пользователя
+        const currentUser = await pool.query(
+            'SELECT username FROM users WHERE user_id = $1',
             [userId]
         );
-
-        if (userCheck.rows.length === 0) {
-            return res.status(404).json({ 
-                success: false,
-                error: 'Пользователь не найден' 
-            });
-        }
-
-        // Проверяем уникальность username (если изменился)
-        if (username && username !== userCheck.rows[0].username) {
-            const usernameCheck = await pool.query(
-                'SELECT * FROM users WHERE username = $1 AND user_id != $2',
-                [username, userId]
-            );
-
-            if (usernameCheck.rows.length > 0) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Имя пользователя уже занято' 
-                });
+        
+        // 2. Если username меняется - проверяем доступность
+        if (currentUser.rows.length > 0) {
+            const currentUsername = currentUser.rows[0].username;
+            
+            if (currentUsername !== username) {
+                // Username меняется - проверяем занят ли новый
+                const checkResult = await pool.query(
+                    'SELECT user_id FROM users WHERE username = $1',
+                    [username]
+                );
+                
+                if (checkResult.rows.length > 0) {
+                    return res.status(400).json({ 
+                        success: false,
+                        error: 'Username already taken' 
+                    });
+                }
             }
         }
 
-        // Проверяем уникальность phone (если изменился)
-        if (phone && phone !== userCheck.rows[0].phone) {
-            const phoneCheck = await pool.query(
-                'SELECT * FROM users WHERE phone = $1 AND user_id != $2',
-                [phone, userId]
-            );
-
-            if (phoneCheck.rows.length > 0) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Номер телефона уже используется' 
-                });
-            }
-        }
-
-        // Проверяем, не занят ли username другим пользователем
-        const checkResult = await pool.query(
-            'SELECT user_id FROM users WHERE username ILIKE $1 AND user_id != $2',
-            [username, userId]
-        );
-
-        if (checkResult.rows.length > 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Username already taken by another user'
-            });
-        }
-
-        // Обновляем профиль
+        // 3. Обновляем профиль
         const result = await pool.query(
             'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
             [display_name, username, bio, phone, userId]
         );
 
-        const updatedUser = result.rows[0];
-        console.log('✅ Profile updated successfully:', updatedUser.user_id);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
 
+        const updatedUser = result.rows[0];
+        
         res.json({
             success: true,
+            message: 'Profile updated successfully',
             user: updatedUser
         });
 
@@ -1060,7 +1039,7 @@ app.put('/api/users/:userId', async (req, res) => {
         console.error('❌ Error updating profile:', error);
         res.status(500).json({ 
             success: false,
-            error: 'Ошибка обновления профиля: ' + error.message 
+            error: 'Server error' 
         });
     }
 });
