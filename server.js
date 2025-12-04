@@ -1238,6 +1238,86 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
   }
 });
 
+// ==================== 👤 ПРОВЕРКА USERNAME ====================
+app.get('/api/username/check/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        console.log('🔍 Checking username:', username);
+        
+        // Проверяем, занят ли username
+        const result = await pool.query(
+            'SELECT user_id FROM users WHERE username ILIKE $1',
+            [username]
+        );
+        
+        const isAvailable = result.rows.length === 0;
+        
+        res.json({
+            success: true,
+            available: isAvailable,
+            message: isAvailable 
+                ? 'Username available' 
+                : 'Username already taken'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error checking username:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Server error' 
+        });
+    }
+});
+
+// ==================== ✏️ ОБНОВИТЬ USERNAME ====================
+app.put('/api/users/:userId/username', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { username } = req.body;
+        
+        console.log('✏️ Updating username:', { userId, username });
+        
+        // Проверяем, не занят ли новый username другим пользователем
+        const checkResult = await pool.query(
+            'SELECT user_id FROM users WHERE username ILIKE $1 AND user_id != $2',
+            [username, userId]
+        );
+        
+        if (checkResult.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username already taken'
+            });
+        }
+        
+        // Обновляем username
+        const updateResult = await pool.query(
+            'UPDATE users SET username = $1 WHERE user_id = $2 RETURNING *',
+            [username, userId]
+        );
+        
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Username updated successfully',
+            user: updateResult.rows[0]
+        });
+        
+    } catch (error) {
+        console.error('❌ Error updating username:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Server error' 
+        });
+    }
+});
+
 // ==================== 🛡️ СИСТЕМА МОДЕРАЦИИ ====================
 
 // 📋 Получить очередь жалоб
