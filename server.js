@@ -1029,6 +1029,19 @@ app.put('/api/users/:userId', async (req, res) => {
             }
         }
 
+        // Проверяем, не занят ли username другим пользователем
+        const checkResult = await pool.query(
+            'SELECT user_id FROM users WHERE username ILIKE $1 AND user_id != $2',
+            [username, userId]
+        );
+
+        if (checkResult.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username already taken by another user'
+            });
+        }
+
         // Обновляем профиль
         const result = await pool.query(
             'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
@@ -1354,6 +1367,41 @@ app.put('/api/users/:userId/username', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             error: 'Server error' 
+        });
+    }
+});
+
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО USERNAME ====================
+app.get('/api/users/search/username/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        
+        console.log('🔍 Searching user by username:', username);
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image, status, bio
+             FROM users 
+             WHERE username ILIKE $1 
+             ORDER BY 
+                 CASE 
+                     WHEN username = $1 THEN 1  -- точное совпадение
+                     WHEN username ILIKE $2 THEN 2  -- начинается с
+                     ELSE 3  -- содержит
+                 END
+             LIMIT 20`,
+            [`%${username}%`, `${username}%`]
+        );
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching users by username:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
         });
     }
 });
