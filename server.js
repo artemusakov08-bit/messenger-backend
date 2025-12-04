@@ -82,7 +82,6 @@ async function initializeDatabase() {
         CREATE TABLE IF NOT EXISTS users (
             user_id TEXT PRIMARY KEY,
             username TEXT UNIQUE,
-            email TEXT,
             display_name TEXT NOT NULL,
             phone TEXT UNIQUE,
             password TEXT,
