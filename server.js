@@ -77,26 +77,67 @@ async function initializeDatabase() {
     // Подключаемся к базе
     await db.connect();
     
-    // 🔥 ПЕРВОЙ создаем таблицу users
+    // 🔥 СОЗДАНИЕ ТАБЛИЦЫ ПОЛЬЗОВАТЕЛЕЙ 
     await db.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        email TEXT,
-        display_name TEXT NOT NULL,
-        phone TEXT UNIQUE,
-        password TEXT,
-        status TEXT DEFAULT 'offline',
-        last_seen BIGINT,
-        role VARCHAR(20) DEFAULT 'user',
-        is_premium BOOLEAN DEFAULT false,
-        is_banned BOOLEAN DEFAULT false,
-        ban_expires BIGINT,
-        warnings INTEGER DEFAULT 0,
-        auth_level VARCHAR(50) DEFAULT 'sms_only'
-      )
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT UNIQUE,
+            email TEXT,
+            display_name TEXT NOT NULL,
+            phone TEXT UNIQUE,
+            password TEXT,
+            status TEXT DEFAULT 'offline',
+            last_seen BIGINT,
+            role VARCHAR(20) DEFAULT 'user',
+            is_premium BOOLEAN DEFAULT false,
+            is_banned BOOLEAN DEFAULT false,
+            ban_expires BIGINT,
+            warnings INTEGER DEFAULT 0,
+            auth_level VARCHAR(50) DEFAULT 'sms_only',
+            
+            -- ДОБАВЛЕННЫЕ КОЛОНКИ ДЛЯ ПРОФИЛЯ:
+            bio TEXT,
+            profile_image TEXT,
+            custom_status VARCHAR(255) DEFAULT 'В сети',
+            
+            -- ДОБАВЛЕННЫЕ КОЛОНКИ ДЛЯ НАСТРОЕК:
+            message_notifications BOOLEAN DEFAULT true,
+            call_notifications BOOLEAN DEFAULT true,
+            notification_sound BOOLEAN DEFAULT true,
+            online_status BOOLEAN DEFAULT true,
+            read_receipts BOOLEAN DEFAULT true,
+            settings_updated_at TIMESTAMP,
+            
+            -- ТАЙМСТАМПЫ:
+            created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
+            updated_at BIGINT
+        )
     `);
     
+  // 🔥 ДОБАВЛЯЕМ ОТСУТСТВУЮЩИЕ КОЛОНКИ (ЕСЛИ ТАБЛИЦА УЖЕ СУЩЕСТВУЕТ)
+  const alterColumns = [
+      'bio TEXT',
+      'profile_image TEXT',
+      'custom_status VARCHAR(255) DEFAULT \'В сети\'',
+      'message_notifications BOOLEAN DEFAULT true',
+      'call_notifications BOOLEAN DEFAULT true',
+      'notification_sound BOOLEAN DEFAULT true',
+      'online_status BOOLEAN DEFAULT true',
+      'read_receipts BOOLEAN DEFAULT true',
+      'settings_updated_at TIMESTAMP',
+      'created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000',
+      'updated_at BIGINT'
+  ];
+
+  for (const column of alterColumns) {
+      try {
+          await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${column}`);
+          console.log(`✅ Добавлена колонка: ${column.split(' ')[0]}`);
+      } catch (error) {
+          console.log(`⚠️  Колонка уже существует: ${column.split(' ')[0]}`);
+      }
+  }
+
     // 🔥 ПОТОМ создаем user_security с foreign key
     await db.query(`
       CREATE TABLE IF NOT EXISTS user_security (
