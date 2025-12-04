@@ -1465,6 +1465,49 @@ app.get('/api/groups/:groupId', async (req, res) => {
   }
 });
 
+// ==================== 📋 ПОЛУЧИТЬ ВСЕ ГРУППЫ ====================
+app.get('/api/groups', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT g.*, COUNT(gm.user_id) as member_count
+            FROM groups g
+            LEFT JOIN group_members gm ON g.id = gm.group_id
+            GROUP BY g.id
+            ORDER BY g.created_at DESC
+        `);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('❌ Error getting groups:', error);
+        res.status(500).json({ error: 'Failed to get groups' });
+    }
+});
+
+// ==================== 🔍 ПОИСК ГРУПП ====================
+app.get('/api/groups/search', async (req, res) => {
+    try {
+        const { query } = req.query;
+        
+        if (!query || query.length < 2) {
+            return res.json([]);
+        }
+        
+        const result = await pool.query(`
+            SELECT g.*, COUNT(gm.user_id) as member_count
+            FROM groups g
+            LEFT JOIN group_members gm ON g.id = gm.group_id
+            WHERE g.name ILIKE $1 OR g.description ILIKE $1
+            GROUP BY g.id
+            ORDER BY g.created_at DESC
+        `, [`%${query}%`]);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('❌ Error searching groups:', error);
+        res.status(500).json({ error: 'Search failed' });
+    }
+});
+
 // Создать группу
 app.post('/api/groups', async (req, res) => {
   try {

@@ -28,6 +28,74 @@ router.post('/:chatId/messages', (req, res) => {
     messageController.sendMessage(req, res);
 });
 
+router.get('/groups', (req, res) => {
+    chatController.getGroups(req, res);
+});
+
+// Поиск групп
+router.get('/groups/search', (req, res) => {
+    chatController.searchGroups(req, res);
+});
+
+// Получить информацию о группе
+router.get('/group/:groupId', async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const pool = require('../config/database');
+        
+        const groupResult = await pool.query(
+            `SELECT g.*, 
+                    u.display_name as created_by_name,
+                    COUNT(gm.user_id) as member_count
+             FROM groups g
+             LEFT JOIN users u ON g.created_by = u.user_id
+             LEFT JOIN group_members gm ON g.id = gm.group_id
+             WHERE g.id = $1
+             GROUP BY g.id, u.display_name`,
+            [groupId]
+        );
+        
+        if (groupResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'Группа не найдена'
+            });
+        }
+        
+        // Получаем участников группы
+        const membersResult = await pool.query(
+            `SELECT u.user_id, u.display_name, u.username, u.profile_image, gm.role, gm.joined_at
+             FROM group_members gm
+             JOIN users u ON gm.user_id = u.user_id
+             WHERE gm.group_id = $1
+             ORDER BY 
+                 CASE gm.role 
+                     WHEN 'admin' THEN 1
+                     WHEN 'moderator' THEN 2
+                     ELSE 3 
+                 END,
+                 gm.joined_at`,
+            [groupId]
+        );
+        
+        const group = groupResult.rows[0];
+        group.members = membersResult.rows;
+        group.member_count = parseInt(group.member_count);
+        
+        res.json({
+            success: true,
+            group: group
+        });
+        
+    } catch (error) {
+        console.error('❌ Error getting group:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения группы'
+        });
+    }
+});
+
 // Поиск пользователя для чата
 router.get('/find-user/:phone', async (req, res) => {
     try {

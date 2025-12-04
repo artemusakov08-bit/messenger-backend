@@ -8,33 +8,76 @@ class ChatController {
             
             console.log('💬 Getting user chats:', userId);
 
-            const result = await pool.query(
-                `SELECT DISTINCT 
-                    m.chat_id,
-                    CASE 
-                        WHEN u1.user_id = $1 THEN u2.display_name
-                        ELSE u1.display_name
-                    END as name,
+            // Сначала получаем приватные чаты (из messages)
+            const privateChatsQuery = `
+                SELECT DISTINCT 
+                    chat_id as id,
+                    chat_name as name,
                     'private' as type,
-                    MAX(m.timestamp) as timestamp,
-                    (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message
-                FROM messages m
-                LEFT JOIN users u1 ON u1.user_id = m.sender_id
-                LEFT JOIN users u2 ON u2.user_id != m.sender_id AND u2.user_id IN (
-                    SELECT UNNEST(STRING_TO_ARRAY(REPLACE(m.chat_id, $1, ''), '_')) as user_id
-                    WHERE user_id != ''
-                )
-                WHERE m.chat_id LIKE $2 OR m.chat_id LIKE $3 OR m.chat_id LIKE $4
-                GROUP BY m.chat_id, u1.user_id, u2.user_id, u1.display_name, u2.display_name
-                ORDER BY timestamp DESC`,
-                [userId, `%${userId}%`, `${userId}_%`, `%_${userId}`]
-            );
+                    last_message_time as timestamp,
+                    last_message,
+                    member_count
+                FROM (
+                    SELECT 
+                        m.chat_id,
+                        CASE 
+                            WHEN u1.user_id = $1 THEN u2.display_name
+                            ELSE u1.display_name
+                        END as chat_name,
+                        MAX(m.timestamp) as last_message_time,
+                        (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message,
+                        2 as member_count
+                    FROM messages m
+                    LEFT JOIN users u1 ON u1.user_id = m.sender_id
+                    LEFT JOIN users u2 ON u2.user_id = (
+                        SELECT sender_id FROM messages 
+                        WHERE chat_id = m.chat_id AND sender_id != $1 
+                        LIMIT 1
+                    )
+                    WHERE m.chat_id LIKE $2 OR m.chat_id LIKE $3 OR m.chat_id LIKE $4
+                    GROUP BY m.chat_id, u1.user_id, u2.user_id, u1.display_name, u2.display_name
+                ) as chat_data
+                ORDER BY timestamp DESC NULLS LAST
+            `;
 
-            console.log(`✅ Found ${result.rows.length} chats for user ${userId}`);
+            const privateChatsResult = await pool.query(privateChatsQuery, [
+                userId, 
+                `%${userId}%`, 
+                `${userId}_%`, 
+                `%_${userId}`
+            ]);
+
+            // Затем получаем групповые чаты (из groups и group_members)
+            const groupChatsQuery = `
+                SELECT 
+                    g.id,
+                    g.name,
+                    'group' as type,
+                    COALESCE(
+                        (SELECT MAX(timestamp) FROM messages WHERE chat_id = g.id),
+                        g.created_at
+                    ) as timestamp,
+                    (SELECT text FROM messages WHERE chat_id = g.id ORDER BY timestamp DESC LIMIT 1) as last_message,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+                FROM groups g
+                JOIN group_members gm ON g.id = gm.group_id
+                WHERE gm.user_id = $1
+                ORDER BY timestamp DESC NULLS LAST
+            `;
+
+            const groupChatsResult = await pool.query(groupChatsQuery, [userId]);
+
+            // Объединяем результаты
+            const allChats = [
+                ...privateChatsResult.rows,
+                ...groupChatsResult.rows
+            ].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            console.log(`✅ Found ${allChats.length} chats for user ${userId}`);
             
             res.json({
                 success: true,
-                chats: result.rows
+                chats: allChats
             });
             
         } catch (error) {
