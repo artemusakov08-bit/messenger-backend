@@ -664,6 +664,11 @@ socket.on('send_message', async (messageData) => {
   });
 });
 
+app.get('/api/test/search', async (req, res) => {
+    console.log('✅ ТЕСТОВЫЙ ЭНДПОИНТ ВЫЗВАН');
+    res.json({ test: 'OK', query: req.query.query });
+});
+
 app.get('/api/users/phone/:phone', async (req, res) => {
     try {
         const { phone } = req.params;
