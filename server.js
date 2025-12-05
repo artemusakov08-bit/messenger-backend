@@ -1356,25 +1356,24 @@ app.put('/api/users/:userId/username', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
-    console.log('🔎 === ПОИСК ПОЛЬЗОВАТЕЛЕЙ ЗАПУЩЕН ===');
+    console.log('🔎 ========== ПОИСК ПОЛЬЗОВАТЕЛЕЙ ==========');
+    console.log('📥 Запрос:', req.originalUrl);
+    console.log('🔍 Параметр query:', req.query.query);
     
     try {
-        // Получаем параметр запроса
         const rawQuery = req.query.query || '';
-        console.log('📥 Сырой запрос:', rawQuery);
-        console.log('🔗 Полный URL:', req.originalUrl);
+        console.log('📝 Сырой запрос:', rawQuery);
         
-        // Декодируем URL (убираем %40 для @)
+        // Декодируем
         const decodedQuery = decodeURIComponent(rawQuery);
-        console.log('🔓 Декодированный запрос:', decodedQuery);
+        console.log('🔓 Декодированный:', decodedQuery);
         
-        // Убираем @ если есть и обрезаем пробелы
+        // Убираем @
         const cleanQuery = decodedQuery.replace('@', '').trim();
-        console.log('🧹 Очищенный запрос:', cleanQuery);
+        console.log('🧹 Очищенный:', cleanQuery);
         
-        // Если запрос слишком короткий
         if (!cleanQuery || cleanQuery.length < 2) {
-            console.log('⚠️ Запрос слишком короткий (< 2 символов)');
+            console.log('⚠️ Слишком короткий запрос');
             return res.json({
                 success: true,
                 count: 0,
@@ -1382,93 +1381,41 @@ app.get('/api/users/search', async (req, res) => {
             });
         }
         
-        // ПРОСТОЙ И РАБОЧИЙ SQL ЗАПРОС
+        // ПРОСТЕЙШИЙ ЗАПРОС КОТОРЫЙ РАБОТАЕТ
         const sql = `
-            SELECT 
-                user_id, 
-                username, 
-                display_name, 
-                profile_image, 
-                status, 
-                bio, 
-                phone
+            SELECT user_id, username, display_name, profile_image, status, bio, phone
             FROM users 
-            WHERE 
-                LOWER(username) LIKE LOWER($1) 
-                OR LOWER(display_name) LIKE LOWER($1)
-                OR phone LIKE $2
-            ORDER BY 
-                CASE 
-                    WHEN LOWER(username) = LOWER($3) THEN 1
-                    WHEN LOWER(username) LIKE LOWER($4) THEN 2
-                    WHEN LOWER(display_name) LIKE LOWER($1) THEN 3
-                    ELSE 4
-                END
+            WHERE username ILIKE $1 OR display_name ILIKE $1
             LIMIT 20
         `;
         
         const searchPattern = `%${cleanQuery}%`;
-        const phonePattern = `%${cleanQuery}%`;
-        const exactMatch = cleanQuery;
-        const startsWith = `${cleanQuery}%`;
+        console.log('🔎 Ищем:', searchPattern);
         
-        console.log('📊 Параметры SQL:', {
-            searchPattern,
-            phonePattern,
-            exactMatch,
-            startsWith
-        });
-        
-        // Выполняем запрос
-        const result = await pool.query(sql, [
-            searchPattern,
-            phonePattern,
-            exactMatch,
-            startsWith
-        ]);
-        
-        console.log(`✅ Найдено пользователей: ${result.rows.length}`);
+        const result = await pool.query(sql, [searchPattern]);
+        console.log(`✅ Найдено: ${result.rows.length} пользователей`);
         
         if (result.rows.length > 0) {
-            console.log('👤 Первый пользователь:', {
-                id: result.rows[0].user_id,
+            console.log('👤 Пример:', {
                 username: result.rows[0].username,
                 display_name: result.rows[0].display_name
             });
         }
         
-        // Преобразуем snake_case в camelCase для Android
-        const formattedUsers = result.rows.map(user => ({
-            userId: user.user_id,
-            username: user.username || user.phone, // если username null, используем phone
-            displayName: user.display_name,
-            profileImage: user.profile_image,
-            status: user.status,
-            bio: user.bio,
-            phone: user.phone
-        }));
-        
-        const responseData = {
+        // ПРОСТО ВОЗВРАЩАЕМ КАК ЕСТЬ
+        res.json({
             success: true,
-            count: formattedUsers.length,
-            users: formattedUsers,
-            error: null
-        };
+            count: result.rows.length,
+            users: result.rows
+        });
         
-        console.log('📤 Отправляем ответ:', JSON.stringify(responseData));
-        console.log('🔎 === ПОИСК ЗАВЕРШЕН ===\n');
-        
-        res.json(responseData);
+        console.log('✅ Ответ отправлен\n');
         
     } catch (error) {
-        console.error('❌ КРИТИЧЕСКАЯ ОШИБКА ПОИСКА:', error);
-        console.error('❌ Stack trace:', error.stack);
-        
+        console.error('❌ ОШИБКА:', error);
         res.status(500).json({
             success: false,
-            count: 0,
-            users: [],
-            error: 'Внутренняя ошибка сервера при поиске'
+            error: 'Server error'
         });
     }
 });
