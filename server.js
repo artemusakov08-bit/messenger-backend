@@ -1361,23 +1361,13 @@ app.put('/api/users/:userId/username', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
-    console.log('🔎 ========== ПОИСК ПОЛЬЗОВАТЕЛЕЙ ==========');
-    console.log('📥 Запрос:', req.originalUrl);
-    console.log('🔍 Параметр query:', req.query.query);
+    console.log('✅ === ОБРАБОТЧИК ПОИСКА ВЫЗВАН ===');
     
     try {
-        const rawQuery = req.query.query || '';
-        console.log('📝 Сырой запрос:', rawQuery);
+        const query = req.query.query || '';
+        console.log('🔍 Запрос:', query);
         
-        // Декодируем
-        const decodedQuery = decodeURIComponent(rawQuery);
-        console.log('🔓 Декодированный:', decodedQuery);
-        
-        // Убираем @
-        const cleanQuery = decodedQuery.replace('@', '').trim();
-        console.log('🧹 Очищенный:', cleanQuery);
-        
-        if (!cleanQuery || cleanQuery.length < 2) {
+        if (!query || query.trim().length < 2) {
             console.log('⚠️ Слишком короткий запрос');
             return res.json({
                 success: true,
@@ -1386,41 +1376,46 @@ app.get('/api/users/search', async (req, res) => {
             });
         }
         
-        // ПРОСТЕЙШИЙ ЗАПРОС КОТОРЫЙ РАБОТАЕТ
+        // Убираем @
+        const cleanQuery = query.replace('@', '').trim();
+        console.log('🧹 Очищенный запрос:', cleanQuery);
+        
+        // ПРОСТОЙ SQL ЗАПРОС
         const sql = `
-            SELECT user_id, username, display_name, profile_image, status, bio, phone
+            SELECT 
+                user_id, 
+                username, 
+                display_name, 
+                profile_image, 
+                status, 
+                bio, 
+                phone
             FROM users 
             WHERE username ILIKE $1 OR display_name ILIKE $1
-            LIMIT 20
+            LIMIT 10
         `;
         
         const searchPattern = `%${cleanQuery}%`;
-        console.log('🔎 Ищем:', searchPattern);
+        console.log('🔎 Ищем по шаблону:', searchPattern);
         
         const result = await pool.query(sql, [searchPattern]);
-        console.log(`✅ Найдено: ${result.rows.length} пользователей`);
+        console.log(`📊 Найдено строк: ${result.rows.length}`);
         
-        if (result.rows.length > 0) {
-            console.log('👤 Пример:', {
-                username: result.rows[0].username,
-                display_name: result.rows[0].display_name
-            });
-        }
-        
-        // ПРОСТО ВОЗВРАЩАЕМ КАК ЕСТЬ
+        // Возвращаем как есть
         res.json({
             success: true,
             count: result.rows.length,
             users: result.rows
         });
         
-        console.log('✅ Ответ отправлен\n');
+        console.log('✅ Ответ отправлен');
         
     } catch (error) {
-        console.error('❌ ОШИБКА:', error);
+        console.error('❌ ОШИБКА В ПОИСКЕ:', error);
+        console.error('❌ Stack:', error.stack);
         res.status(500).json({
             success: false,
-            error: 'Server error'
+            error: 'Server error: ' + error.message
         });
     }
 });
