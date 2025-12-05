@@ -992,26 +992,28 @@ app.get('/api/moderation/templates', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
-    console.log('✅ === ВХОД В ОБРАБОТЧИК ПОИСКА ===');
+    console.log('🎯 === НОВЫЙ ОБРАБОТЧИК ПОИСКА ВЫЗВАН! ===');
+    console.log('📝 Получен запрос:', req.query.query);
     
     try {
-        console.log('🔍 Полный объект req.query:', req.query);
-        console.log('🔍 req.query.query:', req.query.query);
-        console.log('🔍 Тип query:', typeof req.query.query);
-        
         const query = req.query.query || '';
-        console.log('📝 Query value:', query);
         
-        // Возвращаем тестовый ответ
+        // ПРОСТОЙ ТЕСТОВЫЙ ОТВЕТ
         res.json({
             success: true,
-            test: "работает",
-            query_received: query,
-            users: [{username: "test"}]
+            message: "Поиск работает!",
+            query: query,
+            users: [
+                {
+                    userId: "test_1",
+                    username: "okey1",
+                    displayName: "Тестовый пользователь"
+                }
+            ]
         });
         
     } catch (error) {
-        console.error('❌ ОШИБКА:', error);
+        console.error('❌ Ошибка:', error);
         res.status(500).json({ error: error.message });
     }
 });
