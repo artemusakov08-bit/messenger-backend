@@ -1356,91 +1356,119 @@ app.put('/api/users/:userId/username', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
+    console.log('🔎 === ПОИСК ПОЛЬЗОВАТЕЛЕЙ ЗАПУЩЕН ===');
+    
     try {
-        let { query } = req.query;
+        // Получаем параметр запроса
+        const rawQuery = req.query.query || '';
+        console.log('📥 Сырой запрос:', rawQuery);
+        console.log('🔗 Полный URL:', req.originalUrl);
         
-        console.log('=== SEARCH DEBUG START ===');
-        console.log('Raw query param:', req.query.query);
-        console.log('URL:', req.originalUrl);
+        // Декодируем URL (убираем %40 для @)
+        const decodedQuery = decodeURIComponent(rawQuery);
+        console.log('🔓 Декодированный запрос:', decodedQuery);
         
-        // 🔥 ДЕКОДИРУЕМ URL-encoded символы
-        if (query) {
-            query = decodeURIComponent(query);
-        }
+        // Убираем @ если есть и обрезаем пробелы
+        const cleanQuery = decodedQuery.replace('@', '').trim();
+        console.log('🧹 Очищенный запрос:', cleanQuery);
         
-        console.log('Decoded query:', query);
-        
-        if (!query || query.trim().length < 2) {
-            console.log('⚠️ Query too short');
+        // Если запрос слишком короткий
+        if (!cleanQuery || cleanQuery.length < 2) {
+            console.log('⚠️ Запрос слишком короткий (< 2 символов)');
             return res.json({
                 success: true,
+                count: 0,
                 users: []
             });
         }
         
-        // 🔥 Если запрос начинается с @, ищем только по username
-        let sqlQuery;
-        let params;
+        // ПРОСТОЙ И РАБОЧИЙ SQL ЗАПРОС
+        const sql = `
+            SELECT 
+                user_id, 
+                username, 
+                display_name, 
+                profile_image, 
+                status, 
+                bio, 
+                phone
+            FROM users 
+            WHERE 
+                LOWER(username) LIKE LOWER($1) 
+                OR LOWER(display_name) LIKE LOWER($1)
+                OR phone LIKE $2
+            ORDER BY 
+                CASE 
+                    WHEN LOWER(username) = LOWER($3) THEN 1
+                    WHEN LOWER(username) LIKE LOWER($4) THEN 2
+                    WHEN LOWER(display_name) LIKE LOWER($1) THEN 3
+                    ELSE 4
+                END
+            LIMIT 20
+        `;
         
-        if (query.startsWith('@')) {
-            const usernameQuery = query.substring(1);
-            console.log('Searching by username (without @):', usernameQuery);
-            
-            sqlQuery = `
-                SELECT user_id, username, display_name, profile_image, status, bio, phone
-                FROM users 
-                WHERE username ILIKE $1
-                ORDER BY 
-                    CASE WHEN username = $2 THEN 1
-                         WHEN username ILIKE $3 THEN 2
-                         ELSE 3 END
-                LIMIT 20`;
-            params = [`%${usernameQuery}%`, usernameQuery, `${usernameQuery}%`];
-        } else {
-            console.log('General search:', query);
-            // Общий поиск
-            sqlQuery = `
-                SELECT user_id, username, display_name, profile_image, status, bio, phone,
-                    CASE 
-                        WHEN username ILIKE $1 THEN 1
-                        WHEN display_name ILIKE $1 THEN 2
-                        ELSE 3
-                    END as relevance
-                FROM users 
-                WHERE username ILIKE $2 
-                    OR display_name ILIKE $2
-                    OR phone ILIKE $2
-                ORDER BY relevance, username
-                LIMIT 20`;
-            params = [`%${query}%`, `%${query}%`];
-        }
+        const searchPattern = `%${cleanQuery}%`;
+        const phonePattern = `%${cleanQuery}%`;
+        const exactMatch = cleanQuery;
+        const startsWith = `${cleanQuery}%`;
         
-        console.log('SQL Query:', sqlQuery);
-        console.log('SQL Params:', params);
+        console.log('📊 Параметры SQL:', {
+            searchPattern,
+            phonePattern,
+            exactMatch,
+            startsWith
+        });
         
-        const result = await pool.query(sqlQuery, params);
+        // Выполняем запрос
+        const result = await pool.query(sql, [
+            searchPattern,
+            phonePattern,
+            exactMatch,
+            startsWith
+        ]);
         
-        console.log(`✅ Found ${result.rows.length} users`);
+        console.log(`✅ Найдено пользователей: ${result.rows.length}`);
+        
         if (result.rows.length > 0) {
-            console.log('First user:', {
+            console.log('👤 Первый пользователь:', {
+                id: result.rows[0].user_id,
                 username: result.rows[0].username,
                 display_name: result.rows[0].display_name
             });
         }
         
-        res.json({
-            success: true,
-            count: result.rows.length,
-            users: result.rows
-        });
+        // Преобразуем snake_case в camelCase для Android
+        const formattedUsers = result.rows.map(user => ({
+            userId: user.user_id,
+            username: user.username || user.phone, // если username null, используем phone
+            displayName: user.display_name,
+            profileImage: user.profile_image,
+            status: user.status,
+            bio: user.bio,
+            phone: user.phone
+        }));
         
-        console.log('=== SEARCH DEBUG END ===');
+        const responseData = {
+            success: true,
+            count: formattedUsers.length,
+            users: formattedUsers,
+            error: null
+        };
+        
+        console.log('📤 Отправляем ответ:', JSON.stringify(responseData));
+        console.log('🔎 === ПОИСК ЗАВЕРШЕН ===\n');
+        
+        res.json(responseData);
         
     } catch (error) {
-        console.error('❌ Search error:', error);
+        console.error('❌ КРИТИЧЕСКАЯ ОШИБКА ПОИСКА:', error);
+        console.error('❌ Stack trace:', error.stack);
+        
         res.status(500).json({
             success: false,
-            error: 'Search failed'
+            count: 0,
+            users: [],
+            error: 'Внутренняя ошибка сервера при поиске'
         });
     }
 });
