@@ -1805,7 +1805,7 @@ app.get('/api/users/:userId/groups', async (req, res) => {
   }
 });
 
-// ==================== 🔍 ПОИСК USERNAME ДЛЯ УПОМИНАНИЙ ====================
+// ==================== 🔍 ПОИСК ПО USERNAME ДЛЯ УПОМИНАНИЙ ====================
 app.get('/api/username/search', async (req, res) => {
     try {
         let { query } = req.query;
