@@ -1354,10 +1354,17 @@ app.put('/api/users/:userId/username', async (req, res) => {
     }
 });
 
-// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ  ====================
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
     try {
-        const { query } = req.query;
+        let { query } = req.query;
+        
+        // 🔥 ДЕКОДИРУЕМ URL-encoded символы
+        if (query) {
+            query = decodeURIComponent(query);
+        }
+        
+        console.log('🔍 Searching users (decoded):', query);
         
         if (!query || query.trim().length < 2) {
             return res.json({
@@ -1366,30 +1373,41 @@ app.get('/api/users/search', async (req, res) => {
             });
         }
         
-        console.log('🔍 Searching users:', query);
+        // 🔥 Если запрос начинается с @, ищем только по username
+        let sqlQuery;
+        let params;
         
-        const result = await pool.query(
-            `SELECT 
-                user_id, 
-                username, 
-                display_name, 
-                profile_image,
-                status,
-                bio,
-                phone,
-                CASE 
-                    WHEN username ILIKE $1 THEN 1
-                    WHEN display_name ILIKE $1 THEN 2
-                    ELSE 3
-                END as relevance
-             FROM users 
-             WHERE username ILIKE $2 
-                OR display_name ILIKE $2
-                OR phone ILIKE $2
-             ORDER BY relevance, username
-             LIMIT 20`,
-            [`%${query}%`, `%${query}%`]
-        );
+        if (query.startsWith('@')) {
+            const usernameQuery = query.substring(1);
+            sqlQuery = `
+                SELECT user_id, username, display_name, profile_image, status, bio, phone
+                FROM users 
+                WHERE username ILIKE $1
+                ORDER BY 
+                    CASE WHEN username = $2 THEN 1
+                         WHEN username ILIKE $3 THEN 2
+                         ELSE 3 END
+                LIMIT 20`;
+            params = [`%${usernameQuery}%`, usernameQuery, `${usernameQuery}%`];
+        } else {
+            // Общий поиск
+            sqlQuery = `
+                SELECT user_id, username, display_name, profile_image, status, bio, phone,
+                    CASE 
+                        WHEN username ILIKE $1 THEN 1
+                        WHEN display_name ILIKE $1 THEN 2
+                        ELSE 3
+                    END as relevance
+                FROM users 
+                WHERE username ILIKE $2 
+                    OR display_name ILIKE $2
+                    OR phone ILIKE $2
+                ORDER BY relevance, username
+                LIMIT 20`;
+            params = [`%${query}%`, `%${query}%`];
+        }
+        
+        const result = await pool.query(sqlQuery, params);
         
         res.json({
             success: true,
@@ -1787,44 +1805,48 @@ app.get('/api/users/:userId/groups', async (req, res) => {
   }
 });
 
-// ==================== 🔍 ПОИСК ПО USERNAME ДЛЯ УПОМИНАНИЙ ====================
+// ==================== 🔍 ПОИСК USERNAME ДЛЯ УПОМИНАНИЙ ====================
 app.get('/api/username/search', async (req, res) => {
-  try {
-    const { query } = req.query;
-    
-    if (!query || query.trim().length < 2) {
-      return res.json({
-        success: true,
-        users: []
-      });
+    try {
+        let { query } = req.query;
+        
+        if (query) {
+            query = decodeURIComponent(query);
+        }
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                users: []
+            });
+        }
+        
+        console.log('🔍 Searching by username for mentions:', query);
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image
+             FROM users 
+             WHERE username ILIKE $1
+             ORDER BY 
+                 CASE WHEN username = $2 THEN 1
+                      WHEN username ILIKE $3 THEN 2
+                      ELSE 3 END
+             LIMIT 10`,
+            [`%${query}%`, query, `${query}%`]
+        );
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Username search error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Username search failed'
+        });
     }
-    
-    console.log('🔍 Searching by username for mentions:', query);
-    
-    const result = await pool.query(
-      `SELECT user_id, username, display_name, profile_image
-       FROM users 
-       WHERE username ILIKE $1
-       ORDER BY 
-         CASE WHEN username = $2 THEN 1
-              WHEN username ILIKE $3 THEN 2
-              ELSE 3 END
-       LIMIT 10`,
-      [`%${query}%`, query, `${query}%`]
-    );
-    
-    res.json({
-      success: true,
-      users: result.rows
-    });
-    
-  } catch (error) {
-    console.error('❌ Username search error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Username search failed'
-    });
-  }
 });
 
 // ==================== 🎯 ОСНОВНЫЕ ЭНДПОИНТЫ ====================
