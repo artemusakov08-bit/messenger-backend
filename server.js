@@ -840,23 +840,6 @@ app.get('/api/chat/find-user/:phone', async (req, res) => {
   }
 });
 
-app.get('/api/users/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
-    console.log('✅ Пользователь найден:', result.rows[0].username);
-    res.json(result.rows[0]);
-  } catch (error) {
-    console.error('❌ Ошибка получения пользователя:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 // 💬 Чаты
 app.get('/api/chats', async (req, res) => {
   try {
@@ -992,33 +975,106 @@ app.get('/api/moderation/templates', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
-    console.log('🎯 === НОВЫЙ ОБРАБОТЧИК ПОИСКА ВЫЗВАН! ===');
-    console.log('📝 Получен запрос:', req.query.query);
+    console.log('🎯 ОБРАБОТЧИК ПОИСКА ВЫЗВАН!');
     
     try {
         const query = req.query.query || '';
+        console.log('🔍 Запрос:', query);
         
-        // ПРОСТОЙ ТЕСТОВЫЙ ОТВЕТ
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                users: []
+            });
+        }
+        
+        const cleanQuery = query.replace('@', '').trim();
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image, status, bio, phone
+             FROM users 
+             WHERE username ILIKE $1 OR display_name ILIKE $1
+             LIMIT 20`,
+            [`%${cleanQuery}%`]
+        );
+        
         res.json({
             success: true,
-            message: "Поиск работает!",
-            query: query,
-            users: [
-                {
-                    userId: "test_1",
-                    username: "okey1",
-                    displayName: "Тестовый пользователь"
-                }
-            ]
+            count: result.rows.length,
+            users: result.rows
         });
         
     } catch (error) {
-        console.error('❌ Ошибка:', error);
-        res.status(500).json({ error: error.message });
+        console.error('❌ Search error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
+        });
     }
 });
 
-// ПРАВИЛЬНАЯ ПРОВЕРКА USERNAME:
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО USERNAME ====================
+app.get('/api/users/search/username/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        console.log('🔍 Searching user by username:', username);
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image, status, bio
+             FROM users 
+             WHERE username ILIKE $1 
+             ORDER BY 
+                 CASE 
+                     WHEN username = $1 THEN 1
+                     WHEN username ILIKE $2 THEN 2
+                     ELSE 3
+                 END
+             LIMIT 20`,
+            [`%${username}%`, `${username}%`]
+        );
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching users by username:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
+        });
+    }
+});
+
+// ==================== 👤 ПОЛУЧИТЬ ПОЛЬЗОВАТЕЛЯ ПО ID ====================
+app.get('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // 🔥 ВАЖНО: Если userId = "search" - это уже обработано выше!
+        if (userId === 'search') {
+            return res.status(400).json({ 
+                error: 'Invalid user ID' 
+            });
+        }
+        
+        const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log('✅ Пользователь найден:', result.rows[0].username);
+        res.json(result.rows[0]);
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения пользователя:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ==================== ✏️ ОБНОВИТЬ ПРОФИЛЬ ====================
 app.put('/api/users/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
@@ -1027,18 +1083,15 @@ app.put('/api/users/:userId', async (req, res) => {
         console.log('✏️ Updating profile:', { userId, username });
 
         // 🔥 ПРАВИЛЬНАЯ ПРОВЕРКА: 
-        // 1. Получаем текущий username пользователя
         const currentUser = await pool.query(
             'SELECT username FROM users WHERE user_id = $1',
             [userId]
         );
         
-        // 2. Если username меняется - проверяем доступность
         if (currentUser.rows.length > 0) {
             const currentUsername = currentUser.rows[0].username;
             
             if (currentUsername !== username) {
-                // Username меняется - проверяем занят ли новый
                 const checkResult = await pool.query(
                     'SELECT user_id FROM users WHERE username = $1',
                     [username]
@@ -1053,7 +1106,6 @@ app.put('/api/users/:userId', async (req, res) => {
             }
         }
 
-        // 3. Обновляем профиль
         const result = await pool.query(
             'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
             [display_name, username, bio, phone, userId]
@@ -1385,43 +1437,6 @@ app.put('/api/users/:userId/username', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             error: 'Server error' 
-        });
-    }
-});
-
-
-
-// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО USERNAME ====================
-app.get('/api/users/search/username/:username', async (req, res) => {
-    try {
-        const { username } = req.params;
-        
-        console.log('🔍 Searching user by username:', username);
-        
-        const result = await pool.query(
-            `SELECT user_id, username, display_name, profile_image, status, bio
-             FROM users 
-             WHERE username ILIKE $1 
-             ORDER BY 
-                 CASE 
-                     WHEN username = $1 THEN 1  -- точное совпадение
-                     WHEN username ILIKE $2 THEN 2  -- начинается с
-                     ELSE 3  -- содержит
-                 END
-             LIMIT 20`,
-            [`%${username}%`, `${username}%`]
-        );
-        
-        res.json({
-            success: true,
-            users: result.rows
-        });
-        
-    } catch (error) {
-        console.error('❌ Error searching users by username:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Search failed'
         });
     }
 });
