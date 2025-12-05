@@ -1359,14 +1359,19 @@ app.get('/api/users/search', async (req, res) => {
     try {
         let { query } = req.query;
         
+        console.log('=== SEARCH DEBUG START ===');
+        console.log('Raw query param:', req.query.query);
+        console.log('URL:', req.originalUrl);
+        
         // 🔥 ДЕКОДИРУЕМ URL-encoded символы
         if (query) {
             query = decodeURIComponent(query);
         }
         
-        console.log('🔍 Searching users (decoded):', query);
+        console.log('Decoded query:', query);
         
         if (!query || query.trim().length < 2) {
+            console.log('⚠️ Query too short');
             return res.json({
                 success: true,
                 users: []
@@ -1379,6 +1384,8 @@ app.get('/api/users/search', async (req, res) => {
         
         if (query.startsWith('@')) {
             const usernameQuery = query.substring(1);
+            console.log('Searching by username (without @):', usernameQuery);
+            
             sqlQuery = `
                 SELECT user_id, username, display_name, profile_image, status, bio, phone
                 FROM users 
@@ -1390,6 +1397,7 @@ app.get('/api/users/search', async (req, res) => {
                 LIMIT 20`;
             params = [`%${usernameQuery}%`, usernameQuery, `${usernameQuery}%`];
         } else {
+            console.log('General search:', query);
             // Общий поиск
             sqlQuery = `
                 SELECT user_id, username, display_name, profile_image, status, bio, phone,
@@ -1407,13 +1415,26 @@ app.get('/api/users/search', async (req, res) => {
             params = [`%${query}%`, `%${query}%`];
         }
         
+        console.log('SQL Query:', sqlQuery);
+        console.log('SQL Params:', params);
+        
         const result = await pool.query(sqlQuery, params);
+        
+        console.log(`✅ Found ${result.rows.length} users`);
+        if (result.rows.length > 0) {
+            console.log('First user:', {
+                username: result.rows[0].username,
+                display_name: result.rows[0].display_name
+            });
+        }
         
         res.json({
             success: true,
             count: result.rows.length,
             users: result.rows
         });
+        
+        console.log('=== SEARCH DEBUG END ===');
         
     } catch (error) {
         console.error('❌ Search error:', error);
