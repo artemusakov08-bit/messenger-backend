@@ -999,23 +999,23 @@ app.get('/api/users/search', async (req, res) => {
         );
         
         // Преобразуем snake_case в camelCase
-        const formattedUsers = result.rows.map(user => {
-            const formatted = {
-                userId: user.user_id,
-                username: user.username || user.phone || 'user',
-                displayName: user.display_name || 'Пользователь',
-                profileImage: user.profile_image || null,
-                status: user.status || 'offline',
-                bio: user.bio || '',
-                phone: user.phone || ''
-            };
-            return formatted;
-        });
+        const formattedUsers = result.rows.map(user => ({
+            id: user.user_id, 
+            user_id: user.user_id, 
+            username: user.username || user.phone || 'user',
+            display_name: user.display_name || 'Пользователь', 
+            displayName: user.display_name || 'Пользователь', 
+            profile_image: user.profile_image,
+            profileImage: user.profile_image,
+            status: user.status || 'offline',
+            bio: user.bio || '',
+            phone: user.phone || ''
+        }));
 
         res.json({
             success: true,
             count: formattedUsers.length,
-            users: formattedUsers  
+            users: formattedUsers
         });
         
     } catch (error) {
