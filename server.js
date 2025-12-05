@@ -576,9 +576,19 @@ socket.on('send_message', async (messageData) => {
   try {
     console.log('💬 WebSocket сообщение получено:', messageData); 
     
-    const { chatId, text, senderId, senderName, type = 'text', targetUserId } = messageData;
+    // 🔥 ИСПРАВЛЕНИЕ: Читаем данные в camelCase И snake_case
+    const chatId = messageData.chatId || messageData.chat_id;
+    const text = messageData.text;
+    const senderId = messageData.senderId || messageData.sender_id;
+    const senderName = messageData.senderName || messageData.sender_name;
+    const type = messageData.type || 'text';
+    const targetUserId = messageData.targetUserId || messageData.target_user_id;
 
-    // 🔥 ИСПРАВЛЕНИЕ 1: Добавляем "private_" префикс к chatId
+    console.log('📊 Парсинг данных:', { 
+      chatId, text, senderId, senderName, type, targetUserId 
+    });
+
+    // Если chatId не указан, но есть targetUserId - создаем chatId
     let finalChatId = chatId;
     if (!chatId && targetUserId && senderId) {
       // Сортируем ID для одинакового формата у обоих пользователей
@@ -587,12 +597,17 @@ socket.on('send_message', async (messageData) => {
       console.log('🆔 Сгенерирован chatId:', finalChatId);
     }
 
-    // 🔥 ИСПРАВЛЕНИЕ 2: Проверяем обязательные поля
+    // Проверяем обязательные поля
     if (!finalChatId || !text || !senderId || !senderName) {
-      console.error('❌ Недостаточно данных:', { finalChatId, text, senderId, senderName });
+      console.error('❌ Недостаточно данных:', { 
+        finalChatId, text, senderId, senderName,
+        rawData: messageData 
+      });
       socket.emit('message_error', { error: 'Missing required fields' });
       return;
     }
+
+    console.log('✅ Данные валидны, сохраняем...');
 
     // Сохраняем в базу через messageController
     const messageController = require('./src/controllers/messageController');
@@ -611,9 +626,9 @@ socket.on('send_message', async (messageData) => {
     const mockRes = {
       json: function(data) {
         // Когда сообщение сохранено в базу
-        console.log('✅ Сообщение сохранено в БД через контроллере:', data);
+        console.log('✅ Сообщение сохранено в БД через контроллер:', data);
         
-        // 🔥 ИСПРАВЛЕНИЕ 3: Определяем получателя
+        // Определяем получателя
         let recipientId = targetUserId;
         
         // Если targetUserId не пришел, пытаемся извлечь из chatId
@@ -630,7 +645,9 @@ socket.on('send_message', async (messageData) => {
           }
         }
         
-        // 🔥 ИСПРАВЛЕНИЕ 4: Отправляем только получателю
+        console.log(`🎯 Определен получатель: ${recipientId}, отправитель: ${senderId}`);
+        
+        // Отправляем только получателю
         if (recipientId) {
           const recipientSocketId = connectedUsers.get(recipientId);
           if (recipientSocketId) {
@@ -638,16 +655,14 @@ socket.on('send_message', async (messageData) => {
             io.to(recipientSocketId).emit('new_message', data);
           } else {
             console.log(`📭 Пользователь ${recipientId} не подключен к WebSocket`);
-            // Можно сохранить в отдельную таблицу для офлайн-доставки
           }
         } else {
           // Если не удалось определить получателя, отправляем в чат (для групп)
           console.log(`📤 Отправляю сообщение в чат ${finalChatId}`);
-          // 🔥 ИСПРАВЛЕНИЕ 5: Не отправляем отправителю
           socket.broadcast.to(finalChatId).emit('new_message', data);
         }
         
-        // 🔥 ИСПРАВЛЕНИЕ 6: Отправляем подтверждение отправителю
+        // Отправляем подтверждение отправителю
         socket.emit('message_sent', { 
           success: true, 
           messageId: data.id,
