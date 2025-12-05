@@ -608,18 +608,29 @@ socket.on('send_message', async (messageData) => {
         // Когда сообщение сохранено в базу
         console.log('✅ Сообщение сохранено в БД через контроллер:', data);
         
-        // Отправляем сообщение в конкретный чат
-        io.to(finalChatId).emit('new_message', data);
-        
-        // Также отправляем уведомление конкретному пользователю если он онлайн
+        // 🔥 ИСПРАВЛЕНИЕ: Отправляем сообщение ТОЛЬКО ПОЛУЧАТЕЛЮ, а не всем в чате
         if (targetUserId) {
           const targetSocketId = connectedUsers.get(targetUserId);
-          if (targetSocketId && !socket.rooms.has(finalChatId)) {
-            socket.to(targetSocketId).emit('new_message_notification', data);
+          if (targetSocketId) {
+            console.log(`📤 Отправляю сообщение пользователю ${targetUserId} (socket: ${targetSocketId})`);
+            io.to(targetSocketId).emit('new_message', data);
+          } else {
+            console.log(`❌ Пользователь ${targetUserId} не подключен к WebSocket`);
           }
+        } else {
+          // Если нет targetUserId, отправляем в чат (для групп)
+          console.log(`📤 Отправляю сообщение в чат ${finalChatId}`);
+          io.to(finalChatId).emit('new_message', data);
         }
         
-        console.log('✅ Сообщение отправлено в чат:', finalChatId);
+        // Также отправляем подтверждение отправителю
+        socket.emit('message_sent', { 
+          success: true, 
+          messageId: data.id,
+          timestamp: data.timestamp
+        });
+        
+        console.log('✅ Сообщение отправлено');
       },
       status: function(code) {
         return this;
@@ -664,11 +675,6 @@ socket.on('send_message', async (messageData) => {
       }
     }
   });
-});
-
-app.get('/api/test/search', async (req, res) => {
-    console.log('✅ ТЕСТОВЫЙ ЭНДПОИНТ ВЫЗВАН');
-    res.json({ test: 'OK', query: req.query.query });
 });
 
 app.get('/api/users/phone/:phone', async (req, res) => {
