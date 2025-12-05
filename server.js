@@ -998,10 +998,24 @@ app.get('/api/users/search', async (req, res) => {
             [`%${cleanQuery}%`]
         );
         
+        // Преобразуем snake_case в camelCase
+        const formattedUsers = result.rows.map(user => {
+            const formatted = {
+                userId: user.user_id,
+                username: user.username || user.phone || 'user',
+                displayName: user.display_name || 'Пользователь',
+                profileImage: user.profile_image || null,
+                status: user.status || 'offline',
+                bio: user.bio || '',
+                phone: user.phone || ''
+            };
+            return formatted;
+        });
+
         res.json({
             success: true,
-            count: result.rows.length,
-            users: result.rows
+            count: formattedUsers.length,
+            users: formattedUsers  
         });
         
     } catch (error) {
