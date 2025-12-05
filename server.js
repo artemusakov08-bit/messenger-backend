@@ -578,14 +578,19 @@ socket.on('send_message', async (messageData) => {
     
     const { chatId, text, senderId, senderName, type = 'text', targetUserId } = messageData;
 
-    // Если chatId не указан, но есть targetUserId - создаем chatId
+    // 🔥 ИСПРАВЛЕНИЕ 1: Добавляем "private_" префикс к chatId
     let finalChatId = chatId;
-    if (!chatId && targetUserId) {
-      finalChatId = [senderId, targetUserId].sort().join('_');
+    if (!chatId && targetUserId && senderId) {
+      // Сортируем ID для одинакового формата у обоих пользователей
+      const ids = [senderId, targetUserId].sort();
+      finalChatId = `private_${ids[0]}_${ids[1]}`;
+      console.log('🆔 Сгенерирован chatId:', finalChatId);
     }
 
-    if (!finalChatId) {
-      socket.emit('message_error', { error: 'Не указан chatId или targetUserId' });
+    // 🔥 ИСПРАВЛЕНИЕ 2: Проверяем обязательные поля
+    if (!finalChatId || !text || !senderId || !senderName) {
+      console.error('❌ Недостаточно данных:', { finalChatId, text, senderId, senderName });
+      socket.emit('message_error', { error: 'Missing required fields' });
       return;
     }
 
@@ -606,33 +611,54 @@ socket.on('send_message', async (messageData) => {
     const mockRes = {
       json: function(data) {
         // Когда сообщение сохранено в базу
-        console.log('✅ Сообщение сохранено в БД через контроллер:', data);
+        console.log('✅ Сообщение сохранено в БД через контроллере:', data);
         
-        // 🔥 ИСПРАВЛЕНИЕ: Отправляем сообщение ТОЛЬКО ПОЛУЧАТЕЛЮ, а не всем в чате
-        if (targetUserId) {
-          const targetSocketId = connectedUsers.get(targetUserId);
-          if (targetSocketId) {
-            console.log(`📤 Отправляю сообщение пользователю ${targetUserId} (socket: ${targetSocketId})`);
-            io.to(targetSocketId).emit('new_message', data);
-          } else {
-            console.log(`❌ Пользователь ${targetUserId} не подключен к WebSocket`);
+        // 🔥 ИСПРАВЛЕНИЕ 3: Определяем получателя
+        let recipientId = targetUserId;
+        
+        // Если targetUserId не пришел, пытаемся извлечь из chatId
+        if (!recipientId && finalChatId.includes('_')) {
+          const parts = finalChatId.split('_');
+          // Формат: private_senderId_recipientId
+          // Находим ID который не равен отправителю
+          for (let part of parts) {
+            if (part !== 'private' && part !== senderId && 
+                (part.startsWith('user') || part.includes('user'))) {
+              recipientId = part;
+              break;
+            }
           }
-        } else {
-          // Если нет targetUserId, отправляем в чат (для групп)
-          console.log(`📤 Отправляю сообщение в чат ${finalChatId}`);
-          io.to(finalChatId).emit('new_message', data);
         }
         
-        // Также отправляем подтверждение отправителю
+        // 🔥 ИСПРАВЛЕНИЕ 4: Отправляем только получателю
+        if (recipientId) {
+          const recipientSocketId = connectedUsers.get(recipientId);
+          if (recipientSocketId) {
+            console.log(`📤 Отправляю сообщение пользователю ${recipientId} (socket: ${recipientSocketId})`);
+            io.to(recipientSocketId).emit('new_message', data);
+          } else {
+            console.log(`📭 Пользователь ${recipientId} не подключен к WebSocket`);
+            // Можно сохранить в отдельную таблицу для офлайн-доставки
+          }
+        } else {
+          // Если не удалось определить получателя, отправляем в чат (для групп)
+          console.log(`📤 Отправляю сообщение в чат ${finalChatId}`);
+          // 🔥 ИСПРАВЛЕНИЕ 5: Не отправляем отправителю
+          socket.broadcast.to(finalChatId).emit('new_message', data);
+        }
+        
+        // 🔥 ИСПРАВЛЕНИЕ 6: Отправляем подтверждение отправителю
         socket.emit('message_sent', { 
           success: true, 
           messageId: data.id,
-          timestamp: data.timestamp
+          timestamp: data.timestamp,
+          chatId: finalChatId
         });
         
         console.log('✅ Сообщение отправлено');
       },
       status: function(code) {
+        console.error('❌ Ошибка сохранения сообщения, код:', code);
         return this;
       }
     };
@@ -642,7 +668,7 @@ socket.on('send_message', async (messageData) => {
 
   } catch (error) {
     console.error('❌ Ошибка отправки сообщения через WebSocket:', error);
-    socket.emit('message_error', { error: 'Failed to send message' });
+    socket.emit('message_error', { error: 'Failed to send message: ' + error.message });
   }
 });
 
