@@ -39,9 +39,11 @@ app.use(bodyParser.json());
 
 // Логирование всех запросов
 app.use((req, res, next) => {
-  console.log(`📨 ${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
-  console.log('📦 Body:', req.body);
-  next();
+    console.log(`📨 ${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+    console.log('🔍 Raw URL:', req.url);
+    console.log('🔍 Query string:', req.query);
+    console.log('📦 Body:', req.body);
+    next();
 });
 
 // 🔥 ПОДКЛЮЧАЕМ РОУТЫ
@@ -1361,62 +1363,27 @@ app.put('/api/users/:userId/username', async (req, res) => {
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
-    console.log('✅ === ОБРАБОТЧИК ПОИСКА ВЫЗВАН ===');
+    console.log('✅ === ВХОД В ОБРАБОТЧИК ПОИСКА ===');
     
     try {
+        console.log('🔍 Полный объект req.query:', req.query);
+        console.log('🔍 req.query.query:', req.query.query);
+        console.log('🔍 Тип query:', typeof req.query.query);
+        
         const query = req.query.query || '';
-        console.log('🔍 Запрос:', query);
+        console.log('📝 Query value:', query);
         
-        if (!query || query.trim().length < 2) {
-            console.log('⚠️ Слишком короткий запрос');
-            return res.json({
-                success: true,
-                count: 0,
-                users: []
-            });
-        }
-        
-        // Убираем @
-        const cleanQuery = query.replace('@', '').trim();
-        console.log('🧹 Очищенный запрос:', cleanQuery);
-        
-        // ПРОСТОЙ SQL ЗАПРОС
-        const sql = `
-            SELECT 
-                user_id, 
-                username, 
-                display_name, 
-                profile_image, 
-                status, 
-                bio, 
-                phone
-            FROM users 
-            WHERE username ILIKE $1 OR display_name ILIKE $1
-            LIMIT 10
-        `;
-        
-        const searchPattern = `%${cleanQuery}%`;
-        console.log('🔎 Ищем по шаблону:', searchPattern);
-        
-        const result = await pool.query(sql, [searchPattern]);
-        console.log(`📊 Найдено строк: ${result.rows.length}`);
-        
-        // Возвращаем как есть
+        // Возвращаем тестовый ответ
         res.json({
             success: true,
-            count: result.rows.length,
-            users: result.rows
+            test: "работает",
+            query_received: query,
+            users: [{username: "test"}]
         });
-        
-        console.log('✅ Ответ отправлен');
         
     } catch (error) {
-        console.error('❌ ОШИБКА В ПОИСКЕ:', error);
-        console.error('❌ Stack:', error.stack);
-        res.status(500).json({
-            success: false,
-            error: 'Server error: ' + error.message
-        });
+        console.error('❌ ОШИБКА:', error);
+        res.status(500).json({ error: error.message });
     }
 });
 
