@@ -1925,4 +1925,7 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`🔒 Security endpoints: /api/security/*`);
   console.log(`⏰ Started at: ${new Date().toISOString()}`);
   console.log(`🌐 Health check: http://localhost:${port}/health`);
+  console.log('🚀 ======= SERVER STARTED =======');
+  console.log('🕒 Time:', new Date().toISOString());
+  console.log('📁 Current directory:', __dirname);
 });
