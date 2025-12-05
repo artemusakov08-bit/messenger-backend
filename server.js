@@ -789,7 +789,7 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
   }
 });
 
-// 🔍 Найти пользователя для чата по телефону
+// 🔍 Найти пользователя для чата по телефону 
 app.get('/api/chat/find-user/:phone', async (req, res) => {
   try {
     const { phone } = req.params;
@@ -797,14 +797,16 @@ app.get('/api/chat/find-user/:phone', async (req, res) => {
     console.log('🔍 Finding user for chat by phone:', phone);
 
     const result = await pool.query(
-      'SELECT user_id, display_name, phone, status FROM users WHERE phone = $1',
+      'SELECT user_id, username, display_name, phone, status FROM users WHERE phone = $1',
       [phone]
     );
     
+    // 🔥 ВАЖНО: НЕ возвращаем 404 при пустом результате
     if (result.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Пользователь не найден' 
+      return res.json({
+        success: true,
+        found: false,
+        user: null
       });
     }
     
@@ -812,8 +814,10 @@ app.get('/api/chat/find-user/:phone', async (req, res) => {
     
     res.json({
       success: true,
+      found: true,
       user: {
         id: user.user_id,
+        username: user.username,
         displayName: user.display_name,
         phone: user.phone,
         status: user.status
@@ -1346,6 +1350,58 @@ app.put('/api/users/:userId/username', async (req, res) => {
         res.status(500).json({ 
             success: false, 
             error: 'Server error' 
+        });
+    }
+});
+
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ  ====================
+app.get('/api/users/search', async (req, res) => {
+    try {
+        const { query } = req.query;
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                users: []
+            });
+        }
+        
+        console.log('🔍 Searching users:', query);
+        
+        const result = await pool.query(
+            `SELECT 
+                user_id, 
+                username, 
+                display_name, 
+                profile_image,
+                status,
+                bio,
+                phone,
+                CASE 
+                    WHEN username ILIKE $1 THEN 1
+                    WHEN display_name ILIKE $1 THEN 2
+                    ELSE 3
+                END as relevance
+             FROM users 
+             WHERE username ILIKE $2 
+                OR display_name ILIKE $2
+                OR phone ILIKE $2
+             ORDER BY relevance, username
+             LIMIT 20`,
+            [`%${query}%`, `%${query}%`]
+        );
+        
+        res.json({
+            success: true,
+            count: result.rows.length,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Search error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
         });
     }
 });
