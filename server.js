@@ -1787,6 +1787,46 @@ app.get('/api/users/:userId/groups', async (req, res) => {
   }
 });
 
+// ==================== 🔍 ПОИСК ПО USERNAME ДЛЯ УПОМИНАНИЙ ====================
+app.get('/api/username/search', async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query || query.trim().length < 2) {
+      return res.json({
+        success: true,
+        users: []
+      });
+    }
+    
+    console.log('🔍 Searching by username for mentions:', query);
+    
+    const result = await pool.query(
+      `SELECT user_id, username, display_name, profile_image
+       FROM users 
+       WHERE username ILIKE $1
+       ORDER BY 
+         CASE WHEN username = $2 THEN 1
+              WHEN username ILIKE $3 THEN 2
+              ELSE 3 END
+       LIMIT 10`,
+      [`%${query}%`, query, `${query}%`]
+    );
+    
+    res.json({
+      success: true,
+      users: result.rows
+    });
+    
+  } catch (error) {
+    console.error('❌ Username search error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Username search failed'
+    });
+  }
+});
+
 // ==================== 🎯 ОСНОВНЫЕ ЭНДПОИНТЫ ====================
 
 // Корневой эндпоинт
