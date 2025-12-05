@@ -990,6 +990,32 @@ app.get('/api/moderation/templates', async (req, res) => {
     }
 });
 
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
+app.get('/api/users/search', async (req, res) => {
+    console.log('✅ === ВХОД В ОБРАБОТЧИК ПОИСКА ===');
+    
+    try {
+        console.log('🔍 Полный объект req.query:', req.query);
+        console.log('🔍 req.query.query:', req.query.query);
+        console.log('🔍 Тип query:', typeof req.query.query);
+        
+        const query = req.query.query || '';
+        console.log('📝 Query value:', query);
+        
+        // Возвращаем тестовый ответ
+        res.json({
+            success: true,
+            test: "работает",
+            query_received: query,
+            users: [{username: "test"}]
+        });
+        
+    } catch (error) {
+        console.error('❌ ОШИБКА:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // ПРАВИЛЬНАЯ ПРОВЕРКА USERNAME:
 app.put('/api/users/:userId', async (req, res) => {
     try {
@@ -1361,31 +1387,7 @@ app.put('/api/users/:userId/username', async (req, res) => {
     }
 });
 
-// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
-app.get('/api/users/search', async (req, res) => {
-    console.log('✅ === ВХОД В ОБРАБОТЧИК ПОИСКА ===');
-    
-    try {
-        console.log('🔍 Полный объект req.query:', req.query);
-        console.log('🔍 req.query.query:', req.query.query);
-        console.log('🔍 Тип query:', typeof req.query.query);
-        
-        const query = req.query.query || '';
-        console.log('📝 Query value:', query);
-        
-        // Возвращаем тестовый ответ
-        res.json({
-            success: true,
-            test: "работает",
-            query_received: query,
-            users: [{username: "test"}]
-        });
-        
-    } catch (error) {
-        console.error('❌ ОШИБКА:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
+
 
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО USERNAME ====================
 app.get('/api/users/search/username/:username', async (req, res) => {
