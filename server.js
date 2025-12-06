@@ -576,7 +576,7 @@ socket.on('send_message', async (messageData) => {
   try {
     console.log('💬 WebSocket сообщение получено:', messageData); 
     
-    // 🔥 ИСПРАВЛЕНИЕ: Читаем данные в camelCase И snake_case
+    // Читаем данные в camelCase И snake_case
     const chatId = messageData.chatId || messageData.chat_id;
     const text = messageData.text;
     const senderId = messageData.senderId || messageData.sender_id;
@@ -628,31 +628,47 @@ socket.on('send_message', async (messageData) => {
         // Когда сообщение сохранено в базу
         console.log('✅ Сообщение сохранено в БД через контроллер:', data);
         
-        // Определяем получателя
+        // 🔥 РАБОЧЕЕ РЕШЕНИЕ: Извлекаем получателя из chatId
         let recipientId = targetUserId;
         
-        // Если targetUserId не пришел, пытаемся извлечь из chatId
-        if (!recipientId && finalChatId.includes('_')) {
-          const parts = finalChatId.split('_');
-          // Формат: private_senderId_recipientId
-          // Находим ID который не равен отправителю
-          for (let part of parts) {
-            if (part !== 'private' && part !== senderId && 
-                (part.startsWith('user') || part.includes('user'))) {
-              recipientId = part;
-              break;
+        // Если targetUserId не пришел, извлекаем из chatId
+        if (!recipientId && finalChatId) {
+          // Формат: private_user_1764432189924_user_1764708912219
+          // Находим все user_ части
+          const userMatches = finalChatId.match(/user_\d+/g);
+          
+          if (userMatches && userMatches.length >= 2) {
+            // userMatches = ["user_1764432189924", "user_1764708912219"]
+            // Находим того, кто не является отправителем
+            for (let userId of userMatches) {
+              if (userId !== senderId) {
+                recipientId = userId;
+                break;
+              }
             }
           }
         }
         
-        console.log(`🎯 Определен получатель: ${recipientId}, отправитель: ${senderId}`);
+        console.log(`🎯 Определен получатель: ${recipientId || 'не найден'}, отправитель: ${senderId}`);
         
-        // Отправляем только получателю
+        // 🔥 РАБОЧЕЕ РЕШЕНИЕ: Отправляем сообщение
         if (recipientId) {
           const recipientSocketId = connectedUsers.get(recipientId);
           if (recipientSocketId) {
             console.log(`📤 Отправляю сообщение пользователю ${recipientId} (socket: ${recipientSocketId})`);
-            io.to(recipientSocketId).emit('new_message', data);
+            
+            // 🔥 Отправляем в формате snake_case (как ожидает Android)
+            const messageForRecipient = {
+              id: data.id,
+              chat_id: data.chat_id,
+              text: data.text,
+              sender_id: data.sender_id,
+              sender_name: data.sender_name,
+              timestamp: data.timestamp,
+              type: data.type
+            };
+            
+            io.to(recipientSocketId).emit('new_message', messageForRecipient);
           } else {
             console.log(`📭 Пользователь ${recipientId} не подключен к WebSocket`);
           }
