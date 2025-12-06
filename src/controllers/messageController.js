@@ -1,4 +1,10 @@
 const pool = require('../config/database');
+let chatSocket = null;
+
+const setChatSocket = (socket) => {
+    chatSocket = socket;
+};
+
 
 class MessageController {
     // Отправить сообщение
@@ -6,20 +12,27 @@ class MessageController {
         console.log('📨 POST /api/messages - Body:', req.body);
         
         try {
-            const { 
-                chatId, text, senderId, senderName, 
-                type = 'text'
-            } = req.body;
+            const { chatId, text, senderId, senderName, type = 'text' } = req.body;
 
             console.log('📝 Параметры:', { chatId, text, senderId, senderName });
 
             // Проверка обязательных полей
-            if (!chatId || !text || !senderId || !senderName) {
+            if (!chatId || !text || !senderId || !senderName) { 
                 console.log('❌ Отсутствуют обязательные поля');
                 return res.status(400).json({ 
                     error: 'Missing required fields: chatId, text, senderId, senderName' 
                 });
             }
+
+        // ✅ ОТПРАВКА ЧЕРЕЗ WEBSOCKET
+        if (chatSocket) {
+            chatSocket.broadcastToChat(chatId, {
+                type: 'new_message',
+                chatId,
+                message: savedMessage,
+                timestamp: Date.now()
+            });
+        }
 
             const messageId = 'msg_' + Date.now();
             
@@ -99,4 +112,4 @@ class MessageController {
     }
 }
 
-module.exports = new MessageController();
+module.exports = { sendMessage, getChatMessages, getRecentMessages, setChatSocket };
