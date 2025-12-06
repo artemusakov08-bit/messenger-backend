@@ -576,15 +576,13 @@ socket.on('send_message', async (messageData) => {
   try {
     console.log('💬 WebSocket сообщение получено:', messageData);
     
-    // Парсим данные
     const chatId = messageData.chatId || messageData.chat_id || '';
     const text = messageData.text || '';
     const senderId = messageData.senderId || messageData.sender_id || '';
     const senderName = messageData.senderName || messageData.sender_name || 'Вы';
     const type = messageData.type || 'text';
-    const targetUserId = messageData.targetUserId || messageData.target_user_id || '';
 
-    console.log('📊 Парсинг:', { chatId, text, senderId, senderName, type, targetUserId });
+    console.log('📊 Парсинг:', { chatId, text, senderId, senderName, type });
 
     // ВАЛИДАЦИЯ
     if (!chatId || !text || !senderId) {
@@ -593,41 +591,7 @@ socket.on('send_message', async (messageData) => {
       return;
     }
 
-    // 🔥 ИСПРАВЛЕНИЕ: Определяем получателя ПРАВИЛЬНО
-    let recipientId = '';
-    
-    // 1. Если есть targetUserId - используем его
-    if (targetUserId) {
-      recipientId = targetUserId;
-    }
-    // 2. Если нет - извлекаем из chatId
-    else {
-      // Формат: private_user_1764432189924_user_1764708912219
-      const regex = /user_\d+/g;
-      const matches = chatId.match(regex);
-      
-      if (matches && matches.length === 2) {
-        const user1 = matches[0]; // user_1764432189924
-        const user2 = matches[1]; // user_1764708912219
-        
-        // Определяем кто отправитель
-        if (senderId === 'user1' || senderId.includes('1764432189924')) {
-          recipientId = user2; // user_1764708912219
-        } else if (senderId === 'user2' || senderId.includes('1764708912219')) {
-          recipientId = user1; // user_1764432189924
-        }
-        // Если senderId уже в формате user_xxxx
-        else if (senderId === user1) {
-          recipientId = user2;
-        } else if (senderId === user2) {
-          recipientId = user1;
-        }
-      }
-    }
-
-    console.log(`🎯 Отправитель: ${senderId}, Получатель: ${recipientId || 'не определен'}`);
-
-    // Сохраняем в базу
+       // Сохраняем в базу
     const messageController = require('./src/controllers/messageController');
     
     const mockReq = {
@@ -638,40 +602,25 @@ socket.on('send_message', async (messageData) => {
       json: function(data) {
         console.log('✅ Сообщение сохранено в БД:', data.id);
         
-        // 🔥 ОТПРАВКА ПОЛУЧАТЕЛЮ
-        if (recipientId) {
-          const recipientSocket = connectedUsers.get(recipientId);
-          
-          if (recipientSocket) {
-            console.log(`📤 Отправляю пользователю ${recipientId} (socket: ${recipientSocket})`);
-            
-            // Формируем сообщение для получателя
-            const messageToSend = {
-              id: data.id,
-              chat_id: data.chat_id || chatId,
-              text: data.text,
-              sender_id: data.sender_id || senderId,
-              sender_name: data.sender_name || senderName,
-              timestamp: data.timestamp || Date.now(),
-              type: data.type || type
-            };
-            
-            // Отправляем
-            io.to(recipientSocket).emit('new_message', messageToSend);
-            console.log('✅ Сообщение отправлено получателю');
-          } else {
-            console.log(`📭 Получатель ${recipientId} офлайн`);
-          }
-        } else {
-          console.log('⚠️ Получатель не определен, отправка отменена');
-        }
-
-        // Подтверждение отправителю
-        socket.emit('message_sent', {
+        // 1. Отправляем сообщение ВСЕМ в комнате КРОМЕ отправителя
+        socket.broadcast.to(chatId).emit('new_message', data);
+        console.log(`📤 Отправлено сообщение в комнату ${chatId} (кроме отправителя)`);
+        
+        // 2. Отправляем ОТПРАВИТЕЛЮ подтверждение с isMine=true
+        const confirmationData = {
           success: true,
           messageId: data.id,
-          timestamp: data.timestamp
-        });
+          timestamp: data.timestamp,
+          chatId: chatId,
+          text: text,
+          senderId: senderId,
+          senderName: senderName,
+          type: type,
+          isMine: true,
+          status: 'SENT'
+        };
+        socket.emit('message_sent', confirmationData);
+        console.log(`📩 Отправлено подтверждение отправителю (isMine=true)`);
       },
       status: function(code) {
         console.error('❌ Ошибка сохранения, код:', code);
@@ -685,12 +634,12 @@ socket.on('send_message', async (messageData) => {
   } catch (error) {
     console.error('❌ Ошибка:', error);
     socket.emit('message_error', { error: error.message });
-  }
+  } 
 });
 
   socket.on('join_chat', (chatId) => {
-    socket.join(chatId);
-    console.log(`👥 Пользователь ${socket.id} присоединился к чату ${chatId}`);
+      socket.join(chatId);
+      console.log(`👥 Пользователь присоединился к чату ${chatId}`);
   });
 
   socket.on('leave_chat', (chatId) => {
