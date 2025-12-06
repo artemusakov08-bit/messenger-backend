@@ -574,132 +574,117 @@ io.on('connection', (socket) => {
 // Отправка сообщения через WebSocket
 socket.on('send_message', async (messageData) => {
   try {
-    console.log('💬 WebSocket сообщение получено:', messageData); 
+    console.log('💬 WebSocket сообщение получено:', messageData);
     
-    // Читаем данные в camelCase И snake_case
-    const chatId = messageData.chatId || messageData.chat_id;
-    const text = messageData.text;
-    const senderId = messageData.senderId || messageData.sender_id;
-    const senderName = messageData.senderName || messageData.sender_name;
+    // Парсим данные
+    const chatId = messageData.chatId || messageData.chat_id || '';
+    const text = messageData.text || '';
+    const senderId = messageData.senderId || messageData.sender_id || '';
+    const senderName = messageData.senderName || messageData.sender_name || 'Вы';
     const type = messageData.type || 'text';
-    const targetUserId = messageData.targetUserId || messageData.target_user_id;
+    const targetUserId = messageData.targetUserId || messageData.target_user_id || '';
 
-    console.log('📊 Парсинг данных:', { 
-      chatId, text, senderId, senderName, type, targetUserId 
-    });
+    console.log('📊 Парсинг:', { chatId, text, senderId, senderName, type, targetUserId });
 
-    // Если chatId не указан, но есть targetUserId - создаем chatId
-    let finalChatId = chatId;
-    if (!chatId && targetUserId && senderId) {
-      // Сортируем ID для одинакового формата у обоих пользователей
-      const ids = [senderId, targetUserId].sort();
-      finalChatId = `private_${ids[0]}_${ids[1]}`;
-      console.log('🆔 Сгенерирован chatId:', finalChatId);
-    }
-
-    // Проверяем обязательные поля
-    if (!finalChatId || !text || !senderId || !senderName) {
-      console.error('❌ Недостаточно данных:', { 
-        finalChatId, text, senderId, senderName,
-        rawData: messageData 
-      });
+    // ВАЛИДАЦИЯ
+    if (!chatId || !text || !senderId) {
+      console.error('❌ Недостаточно данных');
       socket.emit('message_error', { error: 'Missing required fields' });
       return;
     }
 
-    console.log('✅ Данные валидны, сохраняем...');
+    // 🔥 ИСПРАВЛЕНИЕ: Определяем получателя ПРАВИЛЬНО
+    let recipientId = '';
+    
+    // 1. Если есть targetUserId - используем его
+    if (targetUserId) {
+      recipientId = targetUserId;
+    }
+    // 2. Если нет - извлекаем из chatId
+    else {
+      // Формат: private_user_1764432189924_user_1764708912219
+      const regex = /user_\d+/g;
+      const matches = chatId.match(regex);
+      
+      if (matches && matches.length === 2) {
+        const user1 = matches[0]; // user_1764432189924
+        const user2 = matches[1]; // user_1764708912219
+        
+        // Определяем кто отправитель
+        if (senderId === 'user1' || senderId.includes('1764432189924')) {
+          recipientId = user2; // user_1764708912219
+        } else if (senderId === 'user2' || senderId.includes('1764708912219')) {
+          recipientId = user1; // user_1764432189924
+        }
+        // Если senderId уже в формате user_xxxx
+        else if (senderId === user1) {
+          recipientId = user2;
+        } else if (senderId === user2) {
+          recipientId = user1;
+        }
+      }
+    }
 
-    // Сохраняем в базу через messageController
+    console.log(`🎯 Отправитель: ${senderId}, Получатель: ${recipientId || 'не определен'}`);
+
+    // Сохраняем в базу
     const messageController = require('./src/controllers/messageController');
     
-    // Создаем фиктивный req/res объекты для вызова контроллера
     const mockReq = {
-      body: {
-        chatId: finalChatId,
-        text: text,
-        senderId: senderId,
-        senderName: senderName,
-        type: type
-      }
+      body: { chatId, text, senderId, senderName, type }
     };
     
     const mockRes = {
       json: function(data) {
-        // Когда сообщение сохранено в базу
-        console.log('✅ Сообщение сохранено в БД через контроллер:', data);
+        console.log('✅ Сообщение сохранено в БД:', data.id);
         
-        // 🔥 РАБОЧЕЕ РЕШЕНИЕ: Извлекаем получателя из chatId
-        let recipientId = targetUserId;
-        
-        // Если targetUserId не пришел, извлекаем из chatId
-        if (!recipientId && finalChatId) {
-          // Формат: private_user_1764432189924_user_1764708912219
-          // Находим все user_ части
-          const userMatches = finalChatId.match(/user_\d+/g);
-          
-          if (userMatches && userMatches.length >= 2) {
-            // userMatches = ["user_1764432189924", "user_1764708912219"]
-            // Находим того, кто не является отправителем
-            for (let userId of userMatches) {
-              if (userId !== senderId) {
-                recipientId = userId;
-                break;
-              }
-            }
-          }
-        }
-        
-        console.log(`🎯 Определен получатель: ${recipientId || 'не найден'}, отправитель: ${senderId}`);
-        
-        // 🔥 РАБОЧЕЕ РЕШЕНИЕ: Отправляем сообщение
+        // 🔥 ОТПРАВКА ПОЛУЧАТЕЛЮ
         if (recipientId) {
-          const recipientSocketId = connectedUsers.get(recipientId);
-          if (recipientSocketId) {
-            console.log(`📤 Отправляю сообщение пользователю ${recipientId} (socket: ${recipientSocketId})`);
+          const recipientSocket = connectedUsers.get(recipientId);
+          
+          if (recipientSocket) {
+            console.log(`📤 Отправляю пользователю ${recipientId} (socket: ${recipientSocket})`);
             
-            // 🔥 Отправляем в формате snake_case (как ожидает Android)
-            const messageForRecipient = {
+            // Формируем сообщение для получателя
+            const messageToSend = {
               id: data.id,
-              chat_id: data.chat_id,
+              chat_id: data.chat_id || chatId,
               text: data.text,
-              sender_id: data.sender_id,
-              sender_name: data.sender_name,
-              timestamp: data.timestamp,
-              type: data.type
+              sender_id: data.sender_id || senderId,
+              sender_name: data.sender_name || senderName,
+              timestamp: data.timestamp || Date.now(),
+              type: data.type || type
             };
             
-            io.to(recipientSocketId).emit('new_message', messageForRecipient);
+            // Отправляем
+            io.to(recipientSocket).emit('new_message', messageToSend);
+            console.log('✅ Сообщение отправлено получателю');
           } else {
-            console.log(`📭 Пользователь ${recipientId} не подключен к WebSocket`);
+            console.log(`📭 Получатель ${recipientId} офлайн`);
           }
         } else {
-          // Если не удалось определить получателя, отправляем в чат (для групп)
-          console.log(`📤 Отправляю сообщение в чат ${finalChatId}`);
-          socket.broadcast.to(finalChatId).emit('new_message', data);
+          console.log('⚠️ Получатель не определен, отправка отменена');
         }
-        
-        // Отправляем подтверждение отправителю
-        socket.emit('message_sent', { 
-          success: true, 
+
+        // Подтверждение отправителю
+        socket.emit('message_sent', {
+          success: true,
           messageId: data.id,
-          timestamp: data.timestamp,
-          chatId: finalChatId
+          timestamp: data.timestamp
         });
-        
-        console.log('✅ Сообщение отправлено');
       },
       status: function(code) {
-        console.error('❌ Ошибка сохранения сообщения, код:', code);
+        console.error('❌ Ошибка сохранения, код:', code);
+        socket.emit('message_error', { error: 'Failed to save message' });
         return this;
       }
     };
 
-    // Вызываем контроллер
     await messageController.sendMessage(mockReq, mockRes);
 
   } catch (error) {
-    console.error('❌ Ошибка отправки сообщения через WebSocket:', error);
-    socket.emit('message_error', { error: 'Failed to send message: ' + error.message });
+    console.error('❌ Ошибка:', error);
+    socket.emit('message_error', { error: error.message });
   }
 });
 
