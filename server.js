@@ -558,6 +558,7 @@ io.on('connection', (socket) => {
 
   // Регистрация пользователя
   socket.on('user_connected', (userId) => {
+    socket.userId = userId; 
     connectedUsers.set(userId, socket.id);
     console.log(`👤 Пользователь ${userId} подключен (socket: ${socket.id})`);
     
@@ -576,13 +577,20 @@ socket.on('send_message', async (messageData) => {
   try {
     console.log('💬 WebSocket сообщение получено:', messageData);
     
-    const chatId = messageData.chatId || messageData.chat_id || '';
+    // ⬇️ ВАЖНО: Используем ТЕ ЖЕ КЛЮЧИ, что и во фронтенде
+    const chatId = messageData.chat_id || messageData.chatId || '';
     const text = messageData.text || '';
-    const senderId = messageData.senderId || messageData.sender_id || '';
-    const senderName = messageData.senderName || messageData.sender_name || 'Вы';
+    const senderId = messageData.sender_id || messageData.senderId || '';
+    const senderName = messageData.sender_name || messageData.senderName || 'Вы';
     const type = messageData.type || 'text';
 
-    console.log('📊 Парсинг:', { chatId, text, senderId, senderName, type });
+    console.log('📊 Парсинг полей:', { 
+      chatId, 
+      text, 
+      senderId, 
+      senderName, 
+      type 
+    });
 
     // ВАЛИДАЦИЯ
     if (!chatId || !text || !senderId) {
@@ -591,55 +599,46 @@ socket.on('send_message', async (messageData) => {
       return;
     }
 
-       // Сохраняем в базу
-    const messageController = require('./src/controllers/messageController');
+    // ⬇️ ПРОСТАЯ ЛОГИКА БЕЗ СОХРАНЕНИЯ В БАЗУ (для теста)
+    const messageId = 'msg_' + Date.now();
+    const timestamp = Date.now();
     
-    const mockReq = {
-      body: { chatId, text, senderId, senderName, type }
-    };
-    
-    const mockRes = {
-      json: function(data) {
-        console.log('✅ Сообщение сохранено в БД:', data.id);
-        
-        // 1. Отправляем сообщение ВСЕМ в комнате КРОМЕ отправителя
-        socket.broadcast.to(chatId).emit('new_message', data);
-        console.log(`📤 Отправлено сообщение в комнату ${chatId} (кроме отправителя)`);
-        
-        // 2. Отправляем ОТПРАВИТЕЛЮ подтверждение с isMine=true
-        const confirmationData = {
-          success: true,
-          messageId: data.id,
-          timestamp: data.timestamp,
-          chatId: chatId,
-          text: text,
-          senderId: senderId,
-          senderName: senderName,
-          type: type,
-          isMine: true,
-          status: 'SENT'
-        };
-        socket.emit('message_sent', confirmationData);
-        console.log(`📩 Отправлено подтверждение отправителю (isMine=true)`);
-      },
-      status: function(code) {
-        console.error('❌ Ошибка сохранения, код:', code);
-        socket.emit('message_error', { error: 'Failed to save message' });
-        return this;
-      }
-    };
+    console.log('✅ Создано сообщение:', { messageId, chatId, senderId });
 
-    await messageController.sendMessage(mockReq, mockRes);
+    // ⬇️ 1. Отправляем ВСЕМ в чате (включая отправителя)
+    const messageToSend = {
+      id: messageId,
+      chat_id: chatId,
+      text: text,
+      sender_id: senderId,
+      sender_name: senderName,
+      type: type,
+      timestamp: timestamp,
+      status: 'DELIVERED'
+    };
+    
+    // Отправляем в комнату чата всем участникам
+    io.to(chatId).emit('new_message', messageToSend);
+    console.log(`📤 Отправлено сообщение в комнату ${chatId} всем участникам`);
+
+    // ⬇️ 2. Отправляем подтверждение отправителю
+    socket.emit('message_sent', {
+      messageId: messageId,
+      chatId: chatId,
+      status: 'SENT',
+      isMine: true
+    });
+    console.log(`📩 Отправлено подтверждение отправителю`);
 
   } catch (error) {
-    console.error('❌ Ошибка:', error);
+    console.error('❌ Ошибка обработки сообщения:', error);
     socket.emit('message_error', { error: error.message });
   } 
 });
 
   socket.on('join_chat', (chatId) => {
-      socket.join(chatId);
-      console.log(`👥 Пользователь присоединился к чату ${chatId}`);
+    socket.join(chatId);
+    console.log(`👥 Пользователь ${socket.userId} присоединился к чату ${chatId}`);
   });
 
   socket.on('leave_chat', (chatId) => {
