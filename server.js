@@ -51,7 +51,6 @@ app.use('/api/auth', authRoutes);
 const securityRoutes = require('./src/routes/security');
 app.use('/api/security', securityRoutes);
 app.use('/api/security', require('./src/routes/security'));
-app.use('/api/chats', chatRoutes);
 app.use('/api/call', callRoutes);
 app.use('/api/message', messageRoutes);
 
