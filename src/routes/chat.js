@@ -2,42 +2,103 @@ const express = require('express');
 const router = express.Router();
 const chatController = require('../controllers/chatController');
 const messageController = require('../controllers/messageController');
+const authMiddleware = require('../middleware/authMiddleware');
 
-// Получить чаты пользователя
-router.get('/user/:userId', (req, res) => {
-    chatController.getUserChats(req, res);
+// 🔐 ВСЕ РОУТЫ ТРЕБУЮТ АВТОРИЗАЦИИ
+router.use(authMiddleware.authenticate);
+
+// 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
+router.get('/my-chats', async (req, res) => {
+    try {
+        await chatController.getUserChats(req, res);
+    } catch (error) {
+        console.error('❌ Route error getting user chats:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения чатов'
+        });
+    }
 });
 
-// Создать приватный чат
-router.post('/private', (req, res) => {
-    chatController.createPrivateChat(req, res);
+// 👥 ПОЛУЧИТЬ ГРУППЫ
+router.get('/groups', async (req, res) => {
+    try {
+        await chatController.getGroups(req, res);
+    } catch (error) {
+        console.error('❌ Route error getting groups:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения групп'
+        });
+    }
 });
 
-// Получить информацию о чате
-router.get('/:chatId', (req, res) => {
-    chatController.getChat(req, res);
+// 🔍 ПОИСК ГРУПП
+router.get('/groups/search', async (req, res) => {
+    try {
+        await chatController.searchGroups(req, res);
+    } catch (error) {
+        console.error('❌ Route error searching groups:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка поиска групп'
+        });
+    }
 });
 
-// Получить сообщения чата
-router.get('/:chatId/messages', (req, res) => {
-    messageController.getChatMessages(req, res);
+// 💬 СОЗДАТЬ ПРИВАТНЫЙ ЧАТ
+router.post('/private', async (req, res) => {
+    try {
+        await chatController.createPrivateChat(req, res);
+    } catch (error) {
+        console.error('❌ Route error creating private chat:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка создания чата'
+        });
+    }
 });
 
-// Отправить сообщение
-router.post('/:chatId/messages', (req, res) => {
-    messageController.sendMessage(req, res);
+// ℹ️ ПОЛУЧИТЬ ИНФОРМАЦИЮ О ЧАТЕ
+router.get('/:chatId', async (req, res) => {
+    try {
+        await chatController.getChat(req, res);
+    } catch (error) {
+        console.error('❌ Route error getting chat:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения информации о чате'
+        });
+    }
 });
 
-router.get('/groups', (req, res) => {
-    chatController.getGroups(req, res);
+// 💌 ПОЛУЧИТЬ СООБЩЕНИЯ ЧАТА
+router.get('/:chatId/messages', async (req, res) => {
+    try {
+        await messageController.getChatMessages(req, res);
+    } catch (error) {
+        console.error('❌ Route error getting chat messages:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка получения сообщений'
+        });
+    }
 });
 
-// Поиск групп
-router.get('/groups/search', (req, res) => {
-    chatController.searchGroups(req, res);
+// 📤 ОТПРАВИТЬ СООБЩЕНИЕ
+router.post('/:chatId/messages', async (req, res) => {
+    try {
+        await messageController.sendMessage(req, res);
+    } catch (error) {
+        console.error('❌ Route error sending message:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка отправки сообщения'
+        });
+    }
 });
 
-// Получить информацию о группе
+// 👤 ПОЛУЧИТЬ ИНФОРМАЦИЮ О ГРУППЕ
 router.get('/group/:groupId', async (req, res) => {
     try {
         const { groupId } = req.params;
@@ -96,17 +157,18 @@ router.get('/group/:groupId', async (req, res) => {
     }
 });
 
-// Поиск пользователя для чата
+// 🔍 ПОИСК ПОЛЬЗОВАТЕЛЯ ДЛЯ ЧАТА
 router.get('/find-user/:phone', async (req, res) => {
     try {
         const { phone } = req.params;
+        const currentUserId = req.user.user_id; // Текущий авторизованный пользователь
         
         console.log('🔍 Finding user for chat by phone:', phone);
 
         const pool = require('../config/database');
         const result = await pool.query(
-            'SELECT user_id, display_name, phone, status FROM users WHERE phone = $1',
-            [phone]
+            'SELECT user_id, display_name, phone, status, profile_image FROM users WHERE phone = $1 AND user_id != $2',
+            [phone, currentUserId] // Исключаем текущего пользователя
         );
         
         if (result.rows.length === 0) {
@@ -124,7 +186,8 @@ router.get('/find-user/:phone', async (req, res) => {
                 id: user.user_id,
                 displayName: user.display_name,
                 phone: user.phone,
-                status: user.status
+                status: user.status,
+                profileImage: user.profile_image
             }
         });
         

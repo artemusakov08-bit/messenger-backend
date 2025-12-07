@@ -51,9 +51,16 @@ app.use('/api/auth', authRoutes);
 const securityRoutes = require('./src/routes/security');
 app.use('/api/security', securityRoutes);
 app.use('/api/security', require('./src/routes/security'));
-app.use('/api/chat', chatRoutes);
+app.use('/api/chat', chatRoutes); 
 app.use('/api/call', callRoutes);
 app.use('/api/message', messageRoutes);
+
+const authMiddleware = require('./src/middleware/authMiddleware');
+
+// 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
+app.use('/api/chat', authMiddleware.authenticate, chatRoutes);  
+app.use('/api/call', authMiddleware.authenticate, callRoutes);
+app.use('/api/message', authMiddleware.authenticate, messageRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -791,78 +798,6 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
     });
   }
 });
-
-// 🔍 Найти пользователя для чата по телефону 
-app.get('/api/chat/find-user/:phone', async (req, res) => {
-  try {
-    const { phone } = req.params;
-    
-    console.log('🔍 Finding user for chat by phone:', phone);
-
-    const result = await pool.query(
-      'SELECT user_id, username, display_name, phone, status FROM users WHERE phone = $1',
-      [phone]
-    );
-    
-    // 🔥 ВАЖНО: НЕ возвращаем 404 при пустом результате
-    if (result.rows.length === 0) {
-      return res.json({
-        success: true,
-        found: false,
-        user: null
-      });
-    }
-    
-    const user = result.rows[0];
-    
-    res.json({
-      success: true,
-      found: true,
-      user: {
-        id: user.user_id,
-        username: user.username,
-        displayName: user.display_name,
-        phone: user.phone,
-        status: user.status
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Error finding user for chat:', error);
-    res.status(500).json({ 
-      success: false,
-      error: 'Ошибка поиска пользователя' 
-    });
-  }
-});
-
-// 💬 Чаты
-app.get('/api/chats', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM chats ORDER BY timestamp DESC');
-    console.log(`✅ Получено чатов: ${result.rows.length}`);
-    res.json(result.rows);
-  } catch (error) {
-    console.error('❌ Ошибка получения чатов:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-app.get('/api/chats/:chatId/messages', async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    const result = await pool.query(
-      'SELECT * FROM messages WHERE chat_id = $1 ORDER BY timestamp ASC',
-      [chatId]
-    );
-    console.log(`✅ Получено сообщений для чата ${chatId}: ${result.rows.length}`);
-    res.json(result.rows);
-  } catch (error) {
-    console.error('❌ Ошибка получения сообщений:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 
 // ==================== 🤖 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ ====================
 
@@ -1635,46 +1570,6 @@ app.get('/api/moderation/dashboard', async (req, res) => {
       success: false,
       error: 'Failed to get dashboard' 
     });
-  }
-});
-
-// ==================== 🆕 ГРУППЫ ====================
-
-// Получить информацию о группе
-app.get('/api/groups/:groupId', async (req, res) => {
-  try {
-    const { groupId } = req.params;
-    
-    const groupResult = await pool.query(
-      'SELECT * FROM groups WHERE id = $1',
-      [groupId]
-    );
-    
-    if (groupResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Group not found' });
-    }
-    
-    const group = groupResult.rows[0];
-    
-    // Получаем участники группы
-    const membersResult = await pool.query(
-      'SELECT user_id, role FROM group_members WHERE group_id = $1',
-      [groupId]
-    );
-    
-    // Преобразуем в объект {userId: role}
-    const members = {};
-    membersResult.rows.forEach(member => {
-      members[member.user_id] = member.role;
-    });
-    
-    group.members = members;
-    
-    console.log('✅ Группа найдена:', group.name);
-    res.json(group);
-  } catch (error) {
-    console.error('❌ Ошибка получения группы:', error);
-    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
