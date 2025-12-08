@@ -120,10 +120,98 @@ class ChatSocket {
         console.log(`🔗 Пользователь ${userId} отписан от чата ${chatId}`);
     }
 
+    // ✅ ДОБАВЛЕН: Автоматическое создание чата при первом сообщении
+    async createChatIfNotExists(chatId, senderId, messageData) {
+        try {
+            const pool = require('../config/database');
+            
+            // Проверяем существование чата в таблице chats
+            const existingChat = await pool.query(
+                'SELECT id FROM chats WHERE id = $1',
+                [chatId]
+            );
+            
+            if (existingChat.rows.length === 0) {
+                // Получаем ID участников чата
+                const userIds = chatId.split('_');
+                const otherUserId = userIds.find(id => id !== senderId);
+                
+                if (!otherUserId) {
+                    console.error('❌ Не могу определить второго участника чата');
+                    return false;
+                }
+                
+                // Получаем информацию о втором пользователе для имени чата
+                const userResult = await pool.query(
+                    'SELECT user_id, display_name, profile_image FROM users WHERE user_id = $1',
+                    [otherUserId]
+                );
+                
+                let chatName = "Приватный чат";
+                let avatar = null;
+                
+                if (userResult.rows.length > 0) {
+                    const otherUser = userResult.rows[0];
+                    chatName = otherUser.display_name || `User ${otherUserId.slice(-4)}`;
+                    avatar = otherUser.profile_image;
+                }
+                
+                // Создаем запись в таблице chats
+                await pool.query(
+                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                    [chatId, chatName, 'private', Date.now()]
+                );
+                
+                console.log(`✅ Чат автоматически создан: ${chatId} (${chatName})`);
+                
+                // Уведомляем участников о создании чата
+                this.broadcastToChat(chatId, {
+                    type: 'chat_created',
+                    chatId,
+                    chatName,
+                    participants: userIds,
+                    timestamp: Date.now()
+                });
+                
+                // Уведомляем отправителя
+                const senderWs = this.userConnections.get(senderId);
+                if (senderWs) {
+                    senderWs.forEach(ws => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'chat_ready',
+                                chatId,
+                                chatName,
+                                timestamp: Date.now()
+                            }));
+                        }
+                    });
+                }
+                
+                return true;
+            }
+            
+            // Если чат уже существует, обновляем его timestamp
+            await pool.query(
+                'UPDATE chats SET timestamp = $1 WHERE id = $2',
+                [Date.now(), chatId]
+            );
+            
+            return true;
+            
+        } catch (error) {
+            console.error('❌ Ошибка при создании чата:', error);
+            return false;
+        }
+    }
+
     async handleSendMessage(userId, messageData) {
-        const { chatId, text, type = 'text' } = messageData;
+        const { chatId, text, type = 'text', senderName } = messageData;
         
         console.log(`📤 ${userId} отправляет сообщение в ${chatId}: ${text}`);
+        
+        // ✅ ВАЖНО: Проверяем и создаем чат, если его нет
+        await this.createChatIfNotExists(chatId, userId, messageData);
         
         // Сохраняем в БД
         const pool = require('../config/database');
@@ -132,10 +220,16 @@ class ChatSocket {
         const result = await pool.query(
             `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-            [messageId, chatId, text, userId, messageData.senderName || 'User', Date.now(), type]
+            [messageId, chatId, text, userId, senderName || 'User', Date.now(), type]
         );
 
         const savedMessage = result.rows[0];
+        
+        // Обновляем таймстамп чата (поднимаем в списке)
+        await pool.query(
+            'UPDATE chats SET timestamp = $1 WHERE id = $2',
+            [Date.now(), chatId]
+        );
         
         // Отправляем сообщение всем подписанным на чат
         this.broadcastToChat(chatId, {
@@ -159,7 +253,35 @@ class ChatSocket {
             });
         }
         
+        // ✅ ДОБАВЛЕНО: Уведомляем об обновлении списка чатов
+        this.notifyChatListUpdate(chatId);
+        
         console.log(`✅ Сообщение ${messageId} доставлено в чат ${chatId}`);
+    }
+
+    // ✅ ДОБАВЛЕНО: Уведомление об обновлении списка чатов
+    notifyChatListUpdate(chatId) {
+        try {
+            const userIds = chatId.split('_');
+            
+            userIds.forEach(userId => {
+                const userWs = this.userConnections.get(userId);
+                if (userWs) {
+                    userWs.forEach(ws => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'chat_updated',
+                                chatId,
+                                action: 'new_message',
+                                timestamp: Date.now()
+                            }));
+                        }
+                    });
+                }
+            });
+        } catch (error) {
+            console.error('❌ Ошибка уведомления об обновлении чата:', error);
+        }
     }
 
     broadcastToChat(chatId, data) {

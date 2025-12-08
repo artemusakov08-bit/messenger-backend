@@ -155,6 +155,3 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     user_agent TEXT,
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
 );
-
--- 🔧 ОБНОВЛЯЕМ существующих пользователей с ролями
-UPDATE users SET role = 'user' WHERE role IS NULL;
