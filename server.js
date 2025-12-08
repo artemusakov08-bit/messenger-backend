@@ -185,10 +185,10 @@ async function initializeDatabase() {
     
     await db.query(`
       CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT DEFAULT 'private',
-        timestamp BIGINT
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT DEFAULT 'private',
+          timestamp BIGINT
       )
     `);
     
