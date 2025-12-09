@@ -210,7 +210,8 @@ class ChatSocket {
         
         console.log(`📤 ${userId} отправляет сообщение в ${chatId}: ${text}`);
         
-        // ✅ ВАЖНО: Проверяем и создаем чат, если его нет
+        await this.ensureChatExists(chatId, userId);
+        
         await this.createChatIfNotExists(chatId, userId, messageData);
         
         // Сохраняем в БД
@@ -253,13 +254,68 @@ class ChatSocket {
             });
         }
         
-        // ✅ ДОБАВЛЕНО: Уведомляем об обновлении списка чатов
         this.notifyChatListUpdate(chatId);
         
         console.log(`✅ Сообщение ${messageId} доставлено в чат ${chatId}`);
     }
 
-    // ✅ ДОБАВЛЕНО: Уведомление об обновлении списка чатов
+    async ensureChatExists(chatId, senderId) {
+        try {
+            const pool = require('../config/database');
+            
+            // Проверяем существование чата
+            const chatResult = await pool.query(
+                'SELECT id FROM chats WHERE id = $1',
+                [chatId]
+            );
+            
+            if (chatResult.rows.length === 0) {
+                // Получаем ID участников
+                const userIds = chatId.split('_');
+                const otherUserId = userIds.find(id => id !== senderId);
+                
+                if (!otherUserId) {
+                    console.error('❌ Cannot find other user in chat:', chatId);
+                    return;
+                }
+                
+                // Получаем имя другого пользователя
+                const userResult = await pool.query(
+                    'SELECT display_name FROM users WHERE user_id = $1',
+                    [otherUserId]
+                );
+                
+                const otherUserName = userResult.rows.length > 0 
+                    ? userResult.rows[0].display_name 
+                    : `User ${otherUserId.slice(-4)}`;
+                
+                // Создаем чат
+                await pool.query(
+                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                    [chatId, otherUserName, 'private', Date.now()]
+                );
+                
+                console.log(`✅ Chat created via WebSocket: ${chatId} (${otherUserName})`);
+                
+                // Отправляем уведомление о создании чата
+                this.broadcastToChat(chatId, {
+                    type: 'chat_created',
+                    chatId,
+                    chatName: otherUserName,
+                    timestamp: Date.now()
+                });
+            } else {
+                // Обновляем время последней активности
+                await pool.query(
+                    'UPDATE chats SET timestamp = $1 WHERE id = $2',
+                    [Date.now(), chatId]
+                );
+            }
+        } catch (error) {
+            console.error('❌ Error ensuring chat exists:', error);
+        }
+    }
+
     notifyChatListUpdate(chatId) {
         try {
             const userIds = chatId.split('_');

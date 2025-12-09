@@ -1,132 +1,122 @@
 const pool = require('../config/database');
 
 class ChatController {
-    // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
 // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ - ИСПРАВЛЕННЫЙ
 async getUserChats(req, res) {
     try {
         const userId = req.user.user_id;
-        console.log('💬 Getting user chats for:', userId, req.user.display_name);
+        console.log('💬 Getting user chats for:', userId);
 
-        // 1. Чаты из таблицы chats (если есть)
-        const savedChatsQuery = `
-            SELECT 
-                c.id,
-                c.name,
-                c.type,
-                c.timestamp,
-                (SELECT text FROM messages WHERE chat_id = c.id ORDER BY timestamp DESC LIMIT 1) as last_message,
-                (SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id = c.id) as member_count,
-                (SELECT profile_image FROM users WHERE user_id = 
-                    CASE 
-                        WHEN c.id LIKE '%' || $1 || '%' 
-                        THEN REPLACE(REPLACE(c.id, $1, ''), '_', '')
-                    END
-                ) as avatar_url
-            FROM chats c
-            WHERE c.id LIKE '%' || $1 || '%'
-            ORDER BY c.timestamp DESC
+        // 🔥 ЕДИНЫЙ ЗАПРОС ДЛЯ ВСЕХ ЧАТОВ
+        const chatsQuery = `
+            SELECT DISTINCT ON (chat_data.id) *
+            FROM (
+                -- 1. ЧАТЫ ИЗ ТАБЛИЦЫ CHATS
+                SELECT 
+                    c.id,
+                    COALESCE(c.name, 'Приватный чат') as name,
+                    COALESCE(c.type, 'private') as type,
+                    COALESCE(c.timestamp, 0) as timestamp,
+                    (SELECT text FROM messages WHERE chat_id = c.id ORDER BY timestamp DESC LIMIT 1) as last_message,
+                    (SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id = c.id) as member_count,
+                    COALESCE(
+                        (SELECT profile_image FROM users WHERE user_id = (
+                            SELECT CASE 
+                                WHEN split_part(c.id, '_', 1) = $1 
+                                THEN split_part(c.id, '_', 2)
+                                ELSE split_part(c.id, '_', 1)
+                            END
+                        )),
+                        ''
+                    ) as avatar_url
+                FROM chats c
+                WHERE c.id LIKE '%' || $1 || '%'
+
+                UNION ALL
+
+                -- 2. ЧАТЫ ИЗ СООБЩЕНИЙ (если нет в таблице chats)
+                SELECT 
+                    m.chat_id as id,
+                    COALESCE(
+                        (SELECT display_name FROM users WHERE user_id = (
+                            SELECT CASE 
+                                WHEN split_part(m.chat_id, '_', 1) = $1 
+                                THEN split_part(m.chat_id, '_', 2)
+                                ELSE split_part(m.chat_id, '_', 1)
+                            END
+                        )),
+                        'Пользователь'
+                    ) as name,
+                    'private' as type,
+                    MAX(m.timestamp) as timestamp,
+                    (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message,
+                    2 as member_count,
+                    COALESCE(
+                        (SELECT profile_image FROM users WHERE user_id = (
+                            SELECT CASE 
+                                WHEN split_part(m.chat_id, '_', 1) = $1 
+                                THEN split_part(m.chat_id, '_', 2)
+                                ELSE split_part(m.chat_id, '_', 1)
+                            END
+                        )),
+                        ''
+                    ) as avatar_url
+                FROM messages m
+                WHERE m.chat_id LIKE '%' || $1 || '%'
+                  AND NOT EXISTS (SELECT 1 FROM chats WHERE id = m.chat_id)
+                GROUP BY m.chat_id
+
+                UNION ALL
+
+                -- 3. ГРУППОВЫЕ ЧАТЫ
+                SELECT 
+                    g.id,
+                    g.name,
+                    'group' as type,
+                    COALESCE(
+                        (SELECT MAX(timestamp) FROM messages WHERE chat_id = g.id),
+                        g.created_at
+                    ) as timestamp,
+                    (SELECT text FROM messages WHERE chat_id = g.id ORDER BY timestamp DESC LIMIT 1) as last_message,
+                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count,
+                    COALESCE(g.avatar, '') as avatar_url
+                FROM groups g
+                INNER JOIN group_members gm ON g.id = gm.group_id
+                WHERE gm.user_id = $1
+            ) as chat_data
+            ORDER BY id, timestamp DESC
         `;
-        const savedChatsResult = await pool.query(savedChatsQuery, [userId]);
 
-        // 2. НАЙТИ ВСЕ УНИКАЛЬНЫЕ ЧАТЫ ИЗ СООБЩЕНИЙ
-        const messageChatsQuery = `
-            SELECT DISTINCT ON (m.chat_id)
-                m.chat_id as id,
-                CASE 
-                    WHEN m.sender_id = $1 THEN u2.display_name
-                    ELSE u1.display_name
-                END as name,
-                'private' as type,
-                MAX(m.timestamp) OVER (PARTITION BY m.chat_id) as timestamp,
-                FIRST_VALUE(m.text) OVER (
-                    PARTITION BY m.chat_id 
-                    ORDER BY m.timestamp DESC
-                ) as last_message,
-                2 as member_count,
-                CASE 
-                    WHEN m.sender_id = $1 THEN u2.profile_image
-                    ELSE u1.profile_image
-                END as avatar_url
-            FROM messages m
-            LEFT JOIN users u1 ON u1.user_id = m.sender_id
-            LEFT JOIN users u2 ON u2.user_id = (
-                SELECT CASE 
-                    WHEN sender_id = $1 THEN (
-                        SELECT sender_id 
-                        FROM messages m2 
-                        WHERE m2.chat_id = m.chat_id AND m2.sender_id != $1 
-                        LIMIT 1
-                    )
-                    ELSE $1
-                END
-            )
-            WHERE m.chat_id LIKE '%' || $1 || '%'
-            ORDER BY m.chat_id, m.timestamp DESC
-        `;
-        
-        const messageChatsResult = await pool.query(messageChatsQuery, [userId]);
+        const result = await pool.query(chatsQuery, [userId]);
+        const chats = result.rows;
 
-        // 3. Групповые чаты (оставляем как есть)
-        const groupChatsQuery = `
-            SELECT 
-                g.id,
-                g.name,
-                'group' as type,
-                COALESCE(
-                    (SELECT MAX(timestamp) FROM messages WHERE chat_id = g.id::text),
-                    g.created_at
-                ) as timestamp,
-                (SELECT text FROM messages WHERE chat_id = g.id::text ORDER BY timestamp DESC LIMIT 1) as last_message,
-                (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count,
-                g.avatar as avatar_url
-            FROM groups g
-            JOIN group_members gm ON g.id = gm.group_id
-            WHERE gm.user_id = $1
-            ORDER BY timestamp DESC NULLS LAST
-        `;
-        const groupChatsResult = await pool.query(groupChatsQuery, [userId]);
+        // Сортируем по времени (самые новые сверху)
+        chats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
 
-        // Объединяем все чаты
-        const allChats = [
-            ...savedChatsResult.rows,
-            ...messageChatsResult.rows,
-            ...groupChatsResult.rows
-        ];
-
-        // Удаляем дубликаты
-        const uniqueChats = [];
-        const seenIds = new Set();
-        
-        for (const chat of allChats) {
-            if (!seenIds.has(chat.id)) {
-                seenIds.add(chat.id);
+        // Обновляем имена чатов
+        for (const chat of chats) {
+            if (chat.type === 'private' && (chat.name === 'Приватный чат' || !chat.name)) {
+                const userIds = chat.id.split('_');
+                const otherUserId = userIds.find(id => id !== userId);
                 
-                // Если нет имени чата, генерируем его
-                if (!chat.name || chat.name === 'null') {
-                    const chatParts = chat.id.split('_');
-                    const otherUserId = chatParts.find(id => id !== userId);
-                    if (otherUserId) {
-                        const userResult = await pool.query(
-                            'SELECT display_name FROM users WHERE user_id = $1',
-                            [otherUserId]
-                        );
-                        chat.name = userResult.rows[0]?.display_name || `User ${otherUserId.slice(-4)}`;
+                if (otherUserId) {
+                    const userResult = await pool.query(
+                        'SELECT display_name FROM users WHERE user_id = $1',
+                        [otherUserId]
+                    );
+                    
+                    if (userResult.rows.length > 0) {
+                        chat.name = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
                     }
                 }
-                
-                uniqueChats.push(chat);
             }
         }
 
-        // Сортируем по времени
-        uniqueChats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
-        console.log(`✅ Found ${uniqueChats.length} chats for user ${userId}`);
+        console.log(`✅ Found ${chats.length} chats for user ${userId}`);
         
         res.json({
             success: true,
-            chats: uniqueChats
+            chats: chats
         });
         
     } catch (error) {
@@ -224,108 +214,91 @@ async getUserChats(req, res) {
         }
     }
 
-   // 💬 СОЗДАТЬ ПРИВАТНЫЙ ЧАТ 
-    async createPrivateChat(req, res) {
-        try {
-            const { userId1, userId2 } = req.body;
-            const currentUserId = req.user.user_id;
-            
-            console.log('💬 Creating private chat:', { userId1, userId2 });
-
-            // Проверяем, что текущий пользователь - участник чата
-            if (currentUserId !== userId1 && currentUserId !== userId2) {
-                return res.status(403).json({ 
-                    success: false,
-                    error: 'Вы не можете создавать чат без участия' 
-                });
-            }
-
-            const pool = require('../config/database');
-            
-            // Проверяем существование пользователей
-            const usersResult = await pool.query(
-                'SELECT user_id, display_name FROM users WHERE user_id IN ($1, $2)',
-                [userId1, userId2]
-            );
-            
-            if (usersResult.rows.length !== 2) {
-                return res.status(404).json({ 
-                    success: false,
-                    error: 'Один из пользователей не найден' 
-                });
-            }
-
-            // Создаем уникальный ID чата
-            const chatId = [userId1, userId2].sort().join('_');
-            
-            // Находим имя второго пользователя для названия чата
-            const otherUserId = userId1 === currentUserId ? userId2 : userId1;
-            const otherUser = usersResult.rows.find(u => u.user_id === otherUserId);
-            
-            // ✅ ГАРАНТИРУЕМ, что чат будет сохранен в таблицу chats
-            const chatResult = await pool.query(
-                'SELECT id FROM chats WHERE id = $1',
-                [chatId]
-            );
-            
-            if (chatResult.rows.length === 0) {
-                // Создаем новый чат
-                await pool.query(
-                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                    [chatId, otherUser.display_name || `User ${otherUserId.slice(-4)}`, 'private', Date.now()]
-                );
-                console.log('✅ Чат создан в базе:', chatId);
-            } else {
-                // Обновляем timestamp существующего чата
-                await pool.query(
-                    'UPDATE chats SET timestamp = $1 WHERE id = $2',
-                    [Date.now(), chatId]
-                );
-                console.log('✅ Таймстамп чата обновлен:', chatId);
-            }
-
-            // Получаем историю сообщений
-            const messagesResult = await pool.query(
-                `SELECT * FROM messages 
-                WHERE chat_id = $1 
-                ORDER BY timestamp ASC 
-                LIMIT 100`,
-                [chatId]
-            );
-
-            // Получаем информацию о чате
-            const chatInfo = await pool.query(
-                'SELECT * FROM chats WHERE id = $1',
-                [chatId]
-            );
-            
-            let chatName = otherUser.display_name || "Приватный чат";
-            if (chatInfo.rows.length > 0 && chatInfo.rows[0].name) {
-                chatName = chatInfo.rows[0].name;
-            }
-
-            res.json({
-                success: true,
-                chat: {
-                    id: chatId,
-                    name: chatName,
-                    type: 'private',
-                    timestamp: Date.now(),
-                    avatar_url: otherUser.profile_image
-                },
-                messages: messagesResult.rows,
-                messageCount: messagesResult.rows.length,
-                isNew: messagesResult.rows.length === 0
-            });
-            
-        } catch (error) {
-            console.error('❌ Error creating private chat:', error);
-            res.status(500).json({ 
+// 💬 СОЗДАТЬ/ПОЛУЧИТЬ ПРИВАТНЫЙ ЧАТ 
+async createPrivateChat(req, res) {
+    try {
+        const { userId1, userId2 } = req.body;
+        const currentUserId = req.user.user_id;
+        
+        // Проверяем что текущий пользователь участник чата
+        if (currentUserId !== userId1 && currentUserId !== userId2) {
+            return res.status(403).json({ 
                 success: false,
-                error: 'Ошибка создания чата: ' + error.message 
+                error: 'Вы не можете создавать чат без участия' 
             });
         }
+
+        // Создаем ID чата
+        const sortedIds = [userId1, userId2].sort();
+        const chatId = sortedIds.join('_');
+        
+        // Получаем информацию о втором пользователе
+        const otherUserId = userId1 === currentUserId ? userId2 : userId1;
+        const userResult = await pool.query(
+            'SELECT display_name, profile_image FROM users WHERE user_id = $1',
+            [otherUserId]
+        );
+        
+        const otherUser = userResult.rows[0] || { display_name: 'Пользователь', profile_image: null };
+        
+        // 🔥 ГАРАНТИРОВАННО СОЗДАЕМ ЧАТ В ТАБЛИЦЕ CHATS
+        const chatCheck = await pool.query(
+            'SELECT id FROM chats WHERE id = $1',
+            [chatId]
+        );
+        
+        if (chatCheck.rows.length === 0) {
+            await pool.query(
+                'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                [chatId, otherUser.display_name, 'private', Date.now()]
+            );
+            console.log('✅ Чат создан в базе:', chatId);
+        } else {
+            // Обновляем время последней активности
+            await pool.query(
+                'UPDATE chats SET timestamp = $1 WHERE id = $2',
+                [Date.now(), chatId]
+            );
+        }
+
+        // Получаем сообщения
+        const messagesResult = await pool.query(
+            `SELECT * FROM messages 
+             WHERE chat_id = $1 
+             ORDER BY timestamp ASC 
+             LIMIT 100`,
+            [chatId]
+        );
+
+        // Получаем информацию о чате
+        const chatInfo = await pool.query(
+            'SELECT * FROM chats WHERE id = $1',
+            [chatId]
+        );
+
+        res.json({
+            success: true,
+            chat: {
+                id: chatId,
+                name: otherUser.display_name,
+                type: 'private',
+                timestamp: Date.now(),
+                avatar_url: otherUser.profile_image,
+                last_message: messagesResult.rows.length > 0 ? messagesResult.rows[messagesResult.rows.length - 1].text : null
+            },
+            messages: messagesResult.rows,
+            messageCount: messagesResult.rows.length,
+            isNew: messagesResult.rows.length === 0
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creating private chat:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка создания чата: ' + error.message 
+        });
     }
+}
 
     // ℹ️ ПОЛУЧИТЬ ИНФОРМАЦИЮ О ЧАТЕ
     async getChat(req, res) {
