@@ -7,10 +7,40 @@ const setChatSocket = (socket) => {
 
 // Отправить сообщение
 const sendMessage = async (req, res) => {
-    console.log('📨 POST /api/messages - Body:', req.body);
-    
     try {
         const { chatId, text, senderId, senderName, type = 'text' } = req.body;
+        
+        // 🔥 ГАРАНТИРУЕМ ЧТО ЧАТ СУЩЕСТВУЕТ
+        const chatCheck = await pool.query(
+            'SELECT id FROM chats WHERE id = $1',
+            [chatId]
+        );
+        
+        if (chatCheck.rows.length === 0) {
+            // Получаем ID второго пользователя
+            const parts = chatId.split('_');
+            const otherUserId = parts.find(id => id !== senderId);
+            
+            if (otherUserId) {
+                // Получаем имя пользователя
+                const userResult = await pool.query(
+                    'SELECT display_name FROM users WHERE user_id = $1',
+                    [otherUserId]
+                );
+                
+                const otherUserName = userResult.rows.length > 0 
+                    ? userResult.rows[0].display_name 
+                    : `User ${otherUserId.slice(-4)}`;
+                
+                // Создаем чат
+                await pool.query(
+                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                    [chatId, otherUserName, 'private', Date.now()]
+                );
+                
+                console.log(`✅ Chat auto-created on message send: ${chatId}`);
+            }
+        }
 
         console.log('📝 Параметры:', { chatId, text, senderId, senderName });
 

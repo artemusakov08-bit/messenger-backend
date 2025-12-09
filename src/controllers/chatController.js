@@ -7,152 +7,146 @@ async getUserChats(req, res) {
         const userId = req.user.user_id;
         console.log('💬 Getting user chats for:', userId);
 
-        const chatsQuery = `
-            SELECT * FROM (
-                -- 1. ЧАТЫ ИЗ ТАБЛИЦЫ CHATS
-                SELECT 
-                    c.id,
-                    COALESCE(c.name, 'Приватный чат') as name,
-                    COALESCE(c.type, 'private') as type,
-                    COALESCE(c.timestamp, 0) as timestamp,
-                    (SELECT text FROM messages WHERE chat_id = c.id ORDER BY timestamp DESC LIMIT 1) as last_message,
-                    (SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id = c.id) as member_count,
-                    COALESCE(
-                        (SELECT profile_image FROM users WHERE user_id = (
-                            SELECT CASE 
-                                WHEN split_part(c.id, '_', 1) = $1 
-                                THEN split_part(c.id, '_', 2)
-                                ELSE split_part(c.id, '_', 1)
-                            END
-                        )),
-                        ''
-                    ) as avatar_url
-                FROM chats c
-                WHERE c.id LIKE '%' || $1 || '%'
-
-                UNION ALL
-
-                -- 2. ЧАТЫ ИЗ СООБЩЕНИЙ (если нет в таблице chats)
-                SELECT 
-                    m.chat_id as id,
-                    COALESCE(
-                        (SELECT display_name FROM users WHERE user_id = (
-                            SELECT CASE 
-                                WHEN split_part(m.chat_id, '_', 1) = $1 
-                                THEN split_part(m.chat_id, '_', 2)
-                                ELSE split_part(m.chat_id, '_', 1)
-                            END
-                        )),
-                        'Пользователь'
-                    ) as name,
-                    'private' as type,
-                    MAX(m.timestamp) as timestamp,
-                    (SELECT text FROM messages WHERE chat_id = m.chat_id ORDER BY timestamp DESC LIMIT 1) as last_message,
-                    2 as member_count,
-                    COALESCE(
-                        (SELECT profile_image FROM users WHERE user_id = (
-                            SELECT CASE 
-                                WHEN split_part(m.chat_id, '_', 1) = $1 
-                                THEN split_part(m.chat_id, '_', 2)
-                                ELSE split_part(m.chat_id, '_', 1)
-                            END
-                        )),
-                        ''
-                    ) as avatar_url
-                FROM messages m
-                WHERE m.chat_id LIKE '%' || $1 || '%'
-                  AND NOT EXISTS (SELECT 1 FROM chats WHERE id = m.chat_id)
-                GROUP BY m.chat_id
-
-                UNION ALL
-
-                -- 3. ГРУППОВЫЕ ЧАТЫ
-                SELECT 
-                    g.id,
-                    g.name,
-                    'group' as type,
-                    COALESCE(
-                        (SELECT MAX(timestamp) FROM messages WHERE chat_id = g.id),
-                        g.created_at
-                    ) as timestamp,
-                    (SELECT text FROM messages WHERE chat_id = g.id ORDER BY timestamp DESC LIMIT 1) as last_message,
-                    (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count,
-                    COALESCE(g.avatar, '') as avatar_url
-                FROM groups g
-                INNER JOIN group_members gm ON g.id = gm.group_id
-                WHERE gm.user_id = $1
-            ) as chat_data
-            -- 🔥 УДАЛИЛ DISTINCT ON И ИСПРАВИЛ ORDER BY
-            ORDER BY timestamp DESC NULLS LAST
+        // 🔥 ШАГ 1: Получаем все уникальные chat_id из сообщений
+        const messagesQuery = `
+            SELECT DISTINCT chat_id, MAX(timestamp) as last_time
+            FROM messages 
+            WHERE chat_id LIKE '%' || $1 || '%'
+            GROUP BY chat_id
+            ORDER BY last_time DESC
         `;
-
-        const result = await pool.query(chatsQuery, [userId]);
-        let chats = result.rows;
-
-        console.log(`📊 Raw SQL result: ${chats.length} rows`);
-
-        const uniqueChats = [];
-        const seenIds = new Set();
         
-        for (const chat of chats) {
-            if (!seenIds.has(chat.id)) {
-                seenIds.add(chat.id);
-                uniqueChats.push(chat);
-            }
-        }
-
-        chats = uniqueChats;
-
-        // Обновляем имена чатов
-        for (const chat of chats) {
-            if (chat.type === 'private' && (chat.name === 'Приватный чат' || chat.name === 'Пользователь' || !chat.name)) {
-                const userIds = chat.id.split('_');
-                const otherUserId = userIds.find(id => id !== userId);
+        const messagesResult = await pool.query(messagesQuery, [userId]);
+        console.log(`📨 Found ${messagesResult.rows.length} unique chat IDs from messages`);
+        
+        let allChats = [];
+        
+        // 🔥 ШАГ 2: Обрабатываем каждый чат
+        for (const row of messagesResult.rows) {
+            const chatId = row.chat_id;
+            
+            // Получаем информацию о чате из таблицы chats
+            const chatResult = await pool.query(
+                'SELECT id, name, type, timestamp FROM chats WHERE id = $1',
+                [chatId]
+            );
+            
+            let chatData = {
+                id: chatId,
+                type: 'private',
+                timestamp: row.last_time,
+                last_message: '',
+                member_count: 2,
+                avatar_url: ''
+            };
+            
+            // Если чат есть в таблице chats
+            if (chatResult.rows.length > 0) {
+                const dbChat = chatResult.rows[0];
+                chatData.name = dbChat.name || 'Приватный чат';
+                chatData.type = dbChat.type || 'private';
+                chatData.timestamp = dbChat.timestamp || row.last_time;
+            } else {
+                // Если чата нет в таблице chats, определяем имя из пользователя
+                chatData.name = 'Приватный чат';
                 
+                // 🔥 ШАГ 3: Получаем ID второго пользователя
+                const parts = chatId.split('_');
+                let otherUserId = null;
+                
+                // Ищем ID который не равен текущему пользователю
+                for (const part of parts) {
+                    if (part !== userId) {
+                        otherUserId = part;
+                        break;
+                    }
+                }
+                
+                // Получаем имя другого пользователя
                 if (otherUserId) {
                     const userResult = await pool.query(
-                        'SELECT display_name FROM users WHERE user_id = $1',
+                        'SELECT display_name, profile_image FROM users WHERE user_id = $1',
                         [otherUserId]
                     );
                     
                     if (userResult.rows.length > 0) {
-                        chat.name = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
-                    } else {
-                        chat.name = `User ${otherUserId.slice(-4)}`;
+                        const otherUser = userResult.rows[0];
+                        chatData.name = otherUser.display_name || `User ${otherUserId.slice(-4)}`;
+                        chatData.avatar_url = otherUser.profile_image || '';
                     }
                 }
-            }
-        }
-
-        // 🔥 ВАЖНО: СОЗДАЕМ ЧАТЫ В ТАБЛИЦЕ CHATS ЕСЛИ ИХ НЕТ
-        for (const chat of chats) {
-            if (chat.type === 'private') {
-                const chatCheck = await pool.query(
-                    'SELECT id FROM chats WHERE id = $1',
-                    [chat.id]
-                );
                 
-                if (chatCheck.rows.length === 0) {
-                    // Создаем чат в таблице chats
+                // 🔥 ШАГ 4: СОЗДАЕМ ЧАТ В ТАБЛИЦЕ CHATS
+                try {
                     await pool.query(
                         'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                        [chat.id, chat.name, 'private', chat.timestamp || Date.now()]
+                        [chatId, chatData.name, 'private', row.last_time || Date.now()]
                     );
-                    console.log(`✅ Chat created in DB: ${chat.id} (${chat.name})`);
+                    console.log(`✅ Chat created in DB: ${chatId} (${chatData.name})`);
+                } catch (insertError) {
+                    console.log(`ℹ️ Chat already exists or error: ${insertError.message}`);
                 }
             }
+            
+            // 🔥 ШАГ 5: Получаем последнее сообщение
+            const lastMessageResult = await pool.query(
+                'SELECT text FROM messages WHERE chat_id = $1 ORDER BY timestamp DESC LIMIT 1',
+                [chatId]
+            );
+            
+            if (lastMessageResult.rows.length > 0) {
+                chatData.last_message = lastMessageResult.rows[0].text;
+            }
+            
+            allChats.push(chatData);
         }
-
-        console.log(`✅ Found ${chats.length} unique chats for user ${userId}`);
         
-        // 🔥 ВЫВОДИМ ДЛЯ ОТЛАДКИ
-        chats.forEach((chat, i) => {
-            console.log(`   ${i+1}. ${chat.id} - ${chat.name} (${chat.type}) - last: ${chat.last_message?.substring(0, 30)}`);
+        // 🔥 ШАГ 6: Добавляем групповые чаты
+        const groupsQuery = `
+            SELECT 
+                g.id,
+                g.name,
+                'group' as type,
+                COALESCE(
+                    (SELECT MAX(timestamp) FROM messages WHERE chat_id = g.id::text),
+                    g.created_at
+                ) as timestamp,
+                (SELECT text FROM messages WHERE chat_id = g.id::text ORDER BY timestamp DESC LIMIT 1) as last_message,
+                (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count,
+                g.avatar as avatar_url
+            FROM groups g
+            INNER JOIN group_members gm ON g.id = gm.group_id
+            WHERE gm.user_id = $1
+            ORDER BY timestamp DESC
+        `;
+        
+        const groupsResult = await pool.query(groupsQuery, [userId]);
+        
+        for (const group of groupsResult.rows) {
+            allChats.push({
+                id: group.id,
+                name: group.name,
+                type: 'group',
+                timestamp: group.timestamp,
+                last_message: group.last_message || '',
+                member_count: parseInt(group.member_count) || 0,
+                avatar_url: group.avatar_url || ''
+            });
+        }
+        
+        // 🔥 ШАГ 7: Сортируем по времени
+        allChats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        
+        console.log(`✅ Total ${allChats.length} chats for user ${userId}`);
+        
+        // 🔥 ШАГ 8: Выводим для отладки
+        allChats.forEach((chat, i) => {
+            console.log(`${i+1}. ${chat.id} - "${chat.name}" - last: "${chat.last_message?.substring(0, 50) || 'нет'}"`);
         });
         
         res.json({
             success: true,
-            chats: chats
+            chats: allChats
         });
         
     } catch (error) {
