@@ -1,16 +1,14 @@
 const pool = require('../config/database');
 
 class ChatController {
-// 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ - ИСПРАВЛЕННЫЙ
+// 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ 
 async getUserChats(req, res) {
     try {
         const userId = req.user.user_id;
         console.log('💬 Getting user chats for:', userId);
 
-        // 🔥 ЕДИНЫЙ ЗАПРОС ДЛЯ ВСЕХ ЧАТОВ
         const chatsQuery = `
-            SELECT DISTINCT ON (chat_data.id) *
-            FROM (
+            SELECT * FROM (
                 -- 1. ЧАТЫ ИЗ ТАБЛИЦЫ CHATS
                 SELECT 
                     c.id,
@@ -84,18 +82,30 @@ async getUserChats(req, res) {
                 INNER JOIN group_members gm ON g.id = gm.group_id
                 WHERE gm.user_id = $1
             ) as chat_data
-            ORDER BY id, timestamp DESC
+            -- 🔥 УДАЛИЛ DISTINCT ON И ИСПРАВИЛ ORDER BY
+            ORDER BY timestamp DESC NULLS LAST
         `;
 
         const result = await pool.query(chatsQuery, [userId]);
-        const chats = result.rows;
+        let chats = result.rows;
 
-        // Сортируем по времени (самые новые сверху)
-        chats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        console.log(`📊 Raw SQL result: ${chats.length} rows`);
+
+        const uniqueChats = [];
+        const seenIds = new Set();
+        
+        for (const chat of chats) {
+            if (!seenIds.has(chat.id)) {
+                seenIds.add(chat.id);
+                uniqueChats.push(chat);
+            }
+        }
+
+        chats = uniqueChats;
 
         // Обновляем имена чатов
         for (const chat of chats) {
-            if (chat.type === 'private' && (chat.name === 'Приватный чат' || !chat.name)) {
+            if (chat.type === 'private' && (chat.name === 'Приватный чат' || chat.name === 'Пользователь' || !chat.name)) {
                 const userIds = chat.id.split('_');
                 const otherUserId = userIds.find(id => id !== userId);
                 
@@ -107,12 +117,38 @@ async getUserChats(req, res) {
                     
                     if (userResult.rows.length > 0) {
                         chat.name = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
+                    } else {
+                        chat.name = `User ${otherUserId.slice(-4)}`;
                     }
                 }
             }
         }
 
-        console.log(`✅ Found ${chats.length} chats for user ${userId}`);
+        // 🔥 ВАЖНО: СОЗДАЕМ ЧАТЫ В ТАБЛИЦЕ CHATS ЕСЛИ ИХ НЕТ
+        for (const chat of chats) {
+            if (chat.type === 'private') {
+                const chatCheck = await pool.query(
+                    'SELECT id FROM chats WHERE id = $1',
+                    [chat.id]
+                );
+                
+                if (chatCheck.rows.length === 0) {
+                    // Создаем чат в таблице chats
+                    await pool.query(
+                        'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                        [chat.id, chat.name, 'private', chat.timestamp || Date.now()]
+                    );
+                    console.log(`✅ Chat created in DB: ${chat.id} (${chat.name})`);
+                }
+            }
+        }
+
+        console.log(`✅ Found ${chats.length} unique chats for user ${userId}`);
+        
+        // 🔥 ВЫВОДИМ ДЛЯ ОТЛАДКИ
+        chats.forEach((chat, i) => {
+            console.log(`   ${i+1}. ${chat.id} - ${chat.name} (${chat.type}) - last: ${chat.last_message?.substring(0, 30)}`);
+        });
         
         res.json({
             success: true,
@@ -127,6 +163,7 @@ async getUserChats(req, res) {
         });
     }
 }
+
     // 👥 ПОЛУЧИТЬ ГРУППЫ (только в которых пользователь состоит)
     async getGroups(req, res) {
         try {
