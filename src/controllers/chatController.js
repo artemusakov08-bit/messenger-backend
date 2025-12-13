@@ -175,88 +175,90 @@ class ChatController {
     }
 
     // 💬 СОЗДАТЬ ПРИВАТНЫЙ ЧАТ
-    async createPrivateChat(req, res) {
-        try {
-            const { userId1, userId2 } = req.body;
-            const currentUserId = req.user.user_id;
-            
-            // Проверяем что текущий пользователь участник чата
-            if (currentUserId !== userId1 && currentUserId !== userId2) {
-                return res.status(403).json({ 
-                    success: false,
-                    error: 'Вы не можете создавать чат без участия' 
-                });
-            }
-
-            // Создаем ID чата
-            const sortedIds = [userId1, userId2].sort();
-            const chatId = sortedIds.join('_');
-            
-            // Получаем информацию о втором пользователе
-            const otherUserId = userId1 === currentUserId ? userId2 : userId1;
-            const userResult = await pool.query(
-                'SELECT display_name FROM users WHERE user_id = $1',
-                [otherUserId]
-            );
-            
-            const otherUserName = userResult.rows.length > 0 
-                ? userResult.rows[0].display_name 
-                : `User ${otherUserId.slice(-4)}`;
-            
-            // 🔥 Проверяем существование чата
-            const chatCheck = await pool.query(
-                'SELECT id FROM chats WHERE id = $1',
-                [chatId]
-            );
-            
-            // Если чата нет - создаем
-            if (chatCheck.rows.length === 0) {
-                await pool.query(
-                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                    [chatId, otherUserName, 'private', Date.now()]
-                );
-                console.log('✅ Chat created:', chatId);
-            } else {
-                // Обновляем время последней активности
-                await pool.query(
-                    'UPDATE chats SET timestamp = $1 WHERE id = $2',
-                    [Date.now(), chatId]
-                );
-            }
-
-            // Получаем сообщения
-            const messagesResult = await pool.query(
-                `SELECT * FROM messages 
-                 WHERE chat_id = $1 
-                 ORDER BY timestamp ASC 
-                 LIMIT 100`,
-                [chatId]
-            );
-
-            res.json({
-                success: true,
-                chat: {
-                    id: chatId,
-                    name: otherUserName,
-                    type: 'private',
-                    timestamp: Date.now(),
-                    last_message: messagesResult.rows.length > 0 
-                        ? messagesResult.rows[messagesResult.rows.length - 1].text 
-                        : null
-                },
-                messages: messagesResult.rows,
-                messageCount: messagesResult.rows.length,
-                isNew: messagesResult.rows.length === 0
-            });
-            
-        } catch (error) {
-            console.error('❌ Error creating private chat:', error);
-            res.status(500).json({ 
+async createPrivateChat(req, res) {
+    try {
+        const { userId1, userId2 } = req.body;
+        const currentUserId = req.user.user_id;
+        
+        // Проверяем что текущий пользователь участник чата
+        if (currentUserId !== userId1 && currentUserId !== userId2) {
+            return res.status(403).json({ 
                 success: false,
-                error: 'Ошибка создания чата: ' + error.message 
+                error: 'Вы не можете создавать чат без участия' 
             });
         }
+
+        // Создаем ID чата
+        const sortedIds = [userId1, userId2].sort();
+        const chatId = sortedIds.join('_');
+        
+        // Получаем информацию о втором пользователе
+        const otherUserId = userId1 === currentUserId ? userId2 : userId1;
+        const userResult = await pool.query(
+            'SELECT display_name FROM users WHERE user_id = $1',
+            [otherUserId]
+        );
+        
+        const otherUserName = userResult.rows.length > 0 
+            ? userResult.rows[0].display_name 
+            : `User ${otherUserId.slice(-4)}`;
+        
+        // 🔥 Проверяем существование чата
+        const chatCheck = await pool.query(
+            'SELECT id FROM chats WHERE id = $1',
+            [chatId]
+        );
+        
+        // Если чата нет - создаем
+        if (chatCheck.rows.length === 0) {
+            await pool.query(
+                'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                [chatId, otherUserName, 'private', Date.now()]
+            );
+            console.log('✅ Chat created:', chatId);
+        } else {
+            // Обновляем время последней активности
+            await pool.query(
+                'UPDATE chats SET timestamp = $1 WHERE id = $2',
+                [Date.now(), chatId]
+            );
+        }
+
+        // Получаем сообщения
+        const messagesResult = await pool.query(
+            `SELECT * FROM messages 
+             WHERE chat_id = $1 
+             ORDER BY timestamp ASC 
+             LIMIT 100`,
+            [chatId]
+        );
+
+        // 🔥 ВАЖНО: Возвращаем и chatId и chat объект
+        res.json({
+            success: true,
+            chatId: chatId, // ← ДОБАВЬТЕ ЭТУ СТРОКУ
+            chat: {
+                id: chatId,
+                name: otherUserName,
+                type: 'private',
+                timestamp: Date.now(),
+                last_message: messagesResult.rows.length > 0 
+                    ? messagesResult.rows[messagesResult.rows.length - 1].text 
+                    : null
+            },
+            messages: messagesResult.rows,
+            messageCount: messagesResult.rows.length,
+            isNew: messagesResult.rows.length === 0
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creating private chat:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка создания чата: ' + error.message 
+        });
     }
+}
 
     // 👥 ПОЛУЧИТЬ ГРУППЫ
     async getGroups(req, res) {
