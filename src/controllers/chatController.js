@@ -233,10 +233,9 @@ async createPrivateChat(req, res) {
             [chatId]
         );
 
-        // 🔥 ВАЖНО: Возвращаем и chatId и chat объект
         res.json({
             success: true,
-            chatId: chatId, // ← ДОБАВЬТЕ ЭТУ СТРОКУ
+            chatId: chatId, 
             chat: {
                 id: chatId,
                 name: otherUserName,
