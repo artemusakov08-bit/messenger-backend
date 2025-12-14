@@ -181,47 +181,52 @@ class ChatController {
             console.log('📥 Request body:', req.body);
             console.log('👤 User from token:', req.user);
             
-            const { otherUserId } = req.body; // Теперь ожидаем только ID другого пользователя
+            const { userId1, userId2 } = req.body;
             const currentUserId = req.user.user_id;
             
-            // Проверка данных
-            if (!otherUserId) {
+            const actualUserId1 = currentUserId;
+            const actualUserId2 = userId2;
+            
+            console.log('👥 Участники чата:', {
+                fromToken: currentUserId,
+                fromBody: userId1,
+                otherUser: userId2,
+                actualUser1: actualUserId1,
+                actualUser2: actualUserId2
+            });
+            
+            if (!actualUserId2) {
                 return res.status(400).json({ 
                     success: false,
-                    error: 'Не указан ID пользователя для создания чата' 
+                    error: 'Не указан ID второго пользователя' 
                 });
             }
             
-            if (!currentUserId) {
-                return res.status(401).json({ 
-                    success: false,
-                    error: 'Пользователь не авторизован' 
-                });
-            }
-            
-            // Нельзя создать чат с самим собой
-            if (currentUserId === otherUserId) {
+            if (actualUserId1 === actualUserId2) {
+                console.error('❌ ОШИБКА: Пытаешься создать чат с самим собой!');
+                console.error('❌ Текущий пользователь:', actualUserId1);
+                console.error('❌ Второй пользователь:', actualUserId2);
                 return res.status(400).json({ 
                     success: false,
                     error: 'Нельзя создать чат с самим собой' 
                 });
             }
             
-            console.log('👥 Создание чата между:', currentUserId, 'и', otherUserId);
+            console.log('👥 Создание чата между:', actualUserId1, 'и', actualUserId2);
             
-            // Создаем ID чата (сортируем ID для одинакового формата)
-            const sortedIds = [currentUserId, otherUserId].sort();
+            // Создаем ID чата
+            const sortedIds = [actualUserId1, actualUserId2].sort();
             const chatId = sortedIds.join('_');
             
-            console.log('🆔 Chat ID будет:', chatId);
+            console.log('🆔 Chat ID:', chatId);
             
             // Получаем информацию о втором пользователе
             const userResult = await pool.query(
                 'SELECT display_name FROM users WHERE user_id = $1',
-                [otherUserId]
+                [actualUserId2]
             );
             
-            let otherUserName = `User ${otherUserId.slice(-4)}`;
+            let otherUserName = `User ${actualUserId2.slice(-4)}`;
             if (userResult.rows.length > 0) {
                 otherUserName = userResult.rows[0].display_name || otherUserName;
             }
