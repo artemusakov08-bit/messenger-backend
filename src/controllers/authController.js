@@ -193,7 +193,7 @@ class AuthController {
                     type: 'registration',
                     phone: newUser.phone
                 },
-                process.env.JWT_SECRET || 'fallback-secret',
+                process.env.JWT_SECRET,  
                 { expiresIn: '1h' }
             );
 
@@ -309,7 +309,7 @@ class AuthController {
                     role: user.role,
                     phone: user.phone
                 },
-                process.env.JWT_SECRET || 'fallback-secret',
+                process.env.JWT_SECRET, 
                 { expiresIn: '24h' }
             );
 
@@ -382,14 +382,13 @@ class AuthController {
                 });
             }
 
-            // Генерируем токен для операции
             const operationToken = jwt.sign(
                 { 
                     userId: userId,
                     type: '2fa_verified',
                     verifiedAt: new Date()
                 },
-                process.env.JWT_SECRET || 'fallback-secret',
+                process.env.JWT_SECRET,  
                 { expiresIn: '5m' }
             );
 

@@ -3,59 +3,113 @@ const pool = require('../config/database'); // Изменяем на подкл�
 const RolePermissionService = require('../services/auth/RolePermissionService');
 
 const authMiddleware = {
-    authenticate: async (req, res, next) => {
-        try {
-            const token = req.header('Authorization')?.replace('Bearer ', '');
-            
-            if (!token) {
-                return res.status(401).json({ 
-                    success: false,
-                    error: 'Токен отсутствует. Пользователь не авторизован.' 
-                });
-            }
-
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
-            
-            // Используем pool для PostgreSQL
-            const userResult = await pool.query(
-                'SELECT user_id, display_name, username, phone, role, status, profile_image FROM users WHERE user_id = $1',
-                [decoded.userId]
-            );
-            
-            if (userResult.rows.length === 0) {
-                return res.status(401).json({ 
-                    success: false,
-                    error: 'Пользователь не найден' 
-                });
-            }
-
-            const user = userResult.rows[0];
-            req.user = user;
-            req.userId = user.user_id; // Добавляем userId для удобства
-            next();
-        } catch (error) {
-            console.error('❌ Auth middleware error:', error.message);
-            
-            if (error.name === 'JsonWebTokenError') {
-                return res.status(401).json({ 
-                    success: false,
-                    error: 'Неверный токен авторизации' 
-                });
-            }
-            
-            if (error.name === 'TokenExpiredError') {
-                return res.status(401).json({ 
-                    success: false,
-                    error: 'Срок действия токена истек' 
-                });
-            }
-            
-            res.status(401).json({ 
+authenticate: async (req, res, next) => {
+    try {
+        // 🔥 ЛОГИРОВАНИЕ ВХОДЯЩЕГО ЗАПРОСА
+        console.log('🔐 === НАЧАЛО АУТЕНТИФИКАЦИИ ===');
+        console.log('🔐 URL:', req.originalUrl);
+        console.log('🔐 Метод:', req.method);
+        
+        // 🔥 ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ ТОКЕНА
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        
+        if (!authHeader) {
+            console.log('❌ Нет заголовка Authorization');
+            return res.status(401).json({ 
                 success: false,
-                error: 'Ошибка авторизации: ' + error.message 
+                error: 'Требуется авторизация' 
             });
         }
-    },
+        
+        console.log('🔐 Полный заголовок Authorization:', authHeader);
+        
+        // 🔥 ИЗВЛЕЧЕНИЕ ТОКЕНА (поддерживаем Bearer и без него)
+        let token;
+        if (authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7);
+            console.log('🔐 Токен извлечен (с Bearer)');
+        } else {
+            token = authHeader;
+            console.log('🔐 Токен извлечен (без Bearer)');
+        }
+        
+        console.log('🔐 Длина токена:', token.length);
+        console.log('🔐 Токен (первые 30 символов):', token.substring(0, Math.min(30, token.length)) + '...');
+        
+        // 🔥 ПРОВЕРКА JWT_SECRET
+        if (!process.env.JWT_SECRET) {
+            console.error('❌❌❌ ОШИБКА: JWT_SECRET не установлен!');
+            console.error('❌❌❐ Проверь .env файл: JWT_SECRET=твой_ключ_здесь');
+            return res.status(500).json({ 
+                success: false,
+                error: 'Ошибка конфигурации сервера' 
+            });
+        }
+        
+        console.log('🔐 JWT_SECRET установлен (первые 5 символов):', 
+            process.env.JWT_SECRET.substring(0, Math.min(5, process.env.JWT_SECRET.length)) + '...');
+        
+        // 🔥 ВЕРИФИКАЦИЯ ТОКЕНА
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        console.log('✅ Токен верифицирован:', decoded);
+        
+        // 🔥 ПОЛУЧЕНИЕ ПОЛЬЗОВАТЕЛЯ ИЗ БАЗЫ
+        const userResult = await pool.query(
+            'SELECT user_id, display_name, username, phone, role, status, profile_image FROM users WHERE user_id = $1',
+            [decoded.userId]
+        );
+        
+        if (userResult.rows.length === 0) {
+            console.log('❌ Пользователь не найден в БД:', decoded.userId);
+            return res.status(401).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        const user = userResult.rows[0];
+        req.user = user;
+        req.userId = user.user_id;
+        
+        console.log('✅ Аутентификация успешна. Пользователь:', user.user_id, '-', user.display_name);
+        console.log('🔐 === КОНЕЦ АУТЕНТИФИКАЦИИ ===\n');
+        
+        next();
+        
+    } catch (error) {
+        console.error('❌ ОШИБКА АУТЕНТИФИКАЦИИ:', error.message);
+        
+        if (error.name === 'JsonWebTokenError') {
+            console.error('❌ Неверный формат токена:', error.message);
+            return res.status(401).json({ 
+                success: false,
+                error: 'Неверный токен авторизации' 
+            });
+        }
+        
+        if (error.name === 'TokenExpiredError') {
+            console.error('❌ Токен истек');
+            return res.status(401).json({ 
+                success: false,
+                error: 'Срок действия токена истек' 
+            });
+        }
+        
+        if (error.name === 'SyntaxError') {
+            console.error('❌ Синтаксическая ошибка в токене');
+            return res.status(401).json({ 
+                success: false,
+                error: 'Неверный формат токена' 
+            });
+        }
+        
+        console.error('❌ Другая ошибка:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка аутентификации: ' + error.message 
+        });
+    }
+},
 
     requireRole: (roles) => {
         return (req, res, next) => {
