@@ -1,26 +1,27 @@
 const path = require('path');
+const fs = require('fs');
+
 const envPath = path.resolve(__dirname, '..', '..', '.env');
+console.log('📁 Текущая директория контроллера:', __dirname);
 console.log('📁 Путь к .env:', envPath);
+console.log('📁 .env существует?', fs.existsSync(envPath) ? '✅ ДА' : '❌ НЕТ');
+
 require('dotenv').config({ path: envPath });
+
 console.log('🔑 === ПРОВЕРКА ЗАГРУЗКИ ===');
 console.log('🔑 JWT_SECRET загружен:', !!process.env.JWT_SECRET);
-console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 'НЕТ');
 
-const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-    throw new Error('❌❌❌ JWT_SECRET не загружен! Проверь .env файл');
-}
-
-const jwt = require('jsonwebtoken');
-const db = require('../config/database');
-const { UserSecurity, VerificationCode } = require('../models');
-
-require('dotenv').config();
-
-if (!process.env.JWT_SECRET) {
-    console.error('⚠️  ВНИМАНИЕ: JWT_SECRET не найден в .env, использую dev ключ');
+if (process.env.JWT_SECRET) {
+    console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET.length);
+    console.log('🔑 JWT_SECRET (первые 5):', process.env.JWT_SECRET.substring(0, 5) + '...');
 } else {
-    console.log('✅ JWT_SECRET загружен, длина:', process.env.JWT_SECRET.length);
+    console.error('❌ JWT_SECRET НЕ ЗАГРУЖЕН!');
+    console.error('📋 Все переменные окружения:');
+    Object.keys(process.env).forEach(key => {
+        if (key.includes('JWT') || key.includes('SECRET')) {
+            console.error(`  ${key}: ${process.env[key] ? 'ЕСТЬ' : 'НЕТ'}`);
+        }
+    });
 }
 
 class AuthController {
