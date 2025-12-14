@@ -24,6 +24,16 @@ const io = new Server(server, {
 
 const port = process.env.PORT || 10000;
 
+// 🔥 ЗАГРУЗКА .env ФАЙЛА
+require('dotenv').config();
+
+// 🔥 ПРОВЕРКА JWT_SECRET
+if (!process.env.JWT_SECRET) {
+    console.error('❌ ОШИБКА: JWT_SECRET не найден в .env файле');
+    console.log('📁 Текущая директория:', __dirname);
+    console.log('🔍 Ищу .env в:', require('path').resolve(__dirname, '.env'));
+}
+
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
   console.error('❌ НЕПОЙМАННАЯ ОШИБКА:', error);
