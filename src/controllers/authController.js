@@ -1,39 +1,20 @@
-const path = require('path');
-const fs = require('fs');
-
-// 🔥 ЗАГРУЗКА .env САМОЙ ПЕРВОЙ
-const envPath = path.resolve(__dirname, '..', '..', '.env');
-console.log('📁 === ЗАГРУЗКА .env ===');
-console.log('📁 Путь:', envPath);
-console.log('📁 Существует?', fs.existsSync(envPath) ? '✅ ДА' : '❌ НЕТ');
-
-require('dotenv').config({ path: envPath });
-
-// 🔥 ПРОВЕРКА ЗАГРУЗКИ
-console.log('🔑 === ПРОВЕРКА JWT_SECRET ===');
-console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
-
-if (process.env.JWT_SECRET) {
-    console.log('🔑 Длина:', process.env.JWT_SECRET.length);
-    console.log('🔑 Первые 5 символов:', process.env.JWT_SECRET.substring(0, 5) + '...');
-} else {
-    console.error('❌❌❌ JWT_SECRET НЕ ЗАГРУЖЕН!');
-    console.error('📋 Доступные переменные окружения:');
-    Object.keys(process.env).forEach(key => {
-        console.error(`  ${key}: ${process.env[key] ? '****' : 'НЕТ'}`);
-    });
-    throw new Error('JWT_SECRET не найден в .env файле! Проверь файл .env в корне проекта.');
-}
-
-// 🔥 СОЗДАЕМ КОНСТАНТУ JWT_SECRET
-const JWT_SECRET = process.env.JWT_SECRET;
-console.log('✅ JWT_SECRET создан');
-
-// 🔥 ТЕПЕРЬ ИМПОРТЫ
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const { UserSecurity, VerificationCode } = require('../models');
 
+console.log('🔑 === ПРОВЕРКА JWT_SECRET ===');
+console.log('🔑 JWT_SECRET в process.env:', process.env.JWT_SECRET ? 'ЕСТЬ' : 'НЕТ');
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+if (!JWT_SECRET) {
+    console.error('❌ ОШИБКА: JWT_SECRET не найден в переменных окружения Render');
+    throw new Error('JWT_SECRET не настроен в Render Environment Variables');
+}
+
+console.log('✅ JWT_SECRET загружен');
+console.log('🔑 Длина ключа:', JWT_SECRET.length);
+console.log('🔑 Первые 5 символов:', JWT_SECRET.substring(0, 5) + '...');
 console.log('🚀 AuthController инициализирован');
 
 class AuthController {
