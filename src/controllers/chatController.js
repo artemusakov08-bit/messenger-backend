@@ -1,7 +1,7 @@
 const pool = require('../config/database');
 
 class ChatController {
-    // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ - ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ
+    // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
     async getUserChats(req, res) {
         try {
             const userId = req.user.user_id;
@@ -175,89 +175,133 @@ class ChatController {
     }
 
     // 💬 СОЗДАТЬ ПРИВАТНЫЙ ЧАТ
-async createPrivateChat(req, res) {
-    try {
-        const { userId1, userId2 } = req.body;
-        const currentUserId = req.user.user_id;
-        
-        // Проверяем что текущий пользователь участник чата
-        if (currentUserId !== userId1 && currentUserId !== userId2) {
-            return res.status(403).json({ 
-                success: false,
-                error: 'Вы не можете создавать чат без участия' 
-            });
-        }
-
-        // Создаем ID чата
-        const sortedIds = [userId1, userId2].sort();
-        const chatId = sortedIds.join('_');
-        
-        // Получаем информацию о втором пользователе
-        const otherUserId = userId1 === currentUserId ? userId2 : userId1;
-        const userResult = await pool.query(
-            'SELECT display_name FROM users WHERE user_id = $1',
-            [otherUserId]
-        );
-        
-        const otherUserName = userResult.rows.length > 0 
-            ? userResult.rows[0].display_name 
-            : `User ${otherUserId.slice(-4)}`;
-        
-        // 🔥 Проверяем существование чата
-        const chatCheck = await pool.query(
-            'SELECT id FROM chats WHERE id = $1',
-            [chatId]
-        );
-        
-        // Если чата нет - создаем
-        if (chatCheck.rows.length === 0) {
-            await pool.query(
-                'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                [chatId, otherUserName, 'private', Date.now()]
+    async createPrivateChat(req, res) {
+        try {
+            console.log('🔥 createPrivateChat вызван');
+            console.log('📥 Request body:', req.body);
+            console.log('👤 User from token:', req.user);
+            
+            const { otherUserId } = req.body; // Теперь ожидаем только ID другого пользователя
+            const currentUserId = req.user.user_id;
+            
+            // Проверка данных
+            if (!otherUserId) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Не указан ID пользователя для создания чата' 
+                });
+            }
+            
+            if (!currentUserId) {
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Пользователь не авторизован' 
+                });
+            }
+            
+            // Нельзя создать чат с самим собой
+            if (currentUserId === otherUserId) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Нельзя создать чат с самим собой' 
+                });
+            }
+            
+            console.log('👥 Создание чата между:', currentUserId, 'и', otherUserId);
+            
+            // Создаем ID чата (сортируем ID для одинакового формата)
+            const sortedIds = [currentUserId, otherUserId].sort();
+            const chatId = sortedIds.join('_');
+            
+            console.log('🆔 Chat ID будет:', chatId);
+            
+            // Получаем информацию о втором пользователе
+            const userResult = await pool.query(
+                'SELECT display_name FROM users WHERE user_id = $1',
+                [otherUserId]
             );
-            console.log('✅ Chat created:', chatId);
-        } else {
-            // Обновляем время последней активности
-            await pool.query(
-                'UPDATE chats SET timestamp = $1 WHERE id = $2',
-                [Date.now(), chatId]
+            
+            let otherUserName = `User ${otherUserId.slice(-4)}`;
+            if (userResult.rows.length > 0) {
+                otherUserName = userResult.rows[0].display_name || otherUserName;
+            }
+            
+            // 🔥 Проверяем существование чата
+            const chatCheck = await pool.query(
+                'SELECT id, name, type, timestamp FROM chats WHERE id = $1',
+                [chatId]
             );
-        }
-
-        // Получаем сообщения
-        const messagesResult = await pool.query(
-            `SELECT * FROM messages 
-             WHERE chat_id = $1 
-             ORDER BY timestamp ASC 
-             LIMIT 100`,
-            [chatId]
-        );
-
-        res.json({
-            success: true,
-            chatId: chatId, 
-            chat: {
+            
+            let isNewChat = false;
+            
+            // Если чата нет - создаем
+            if (chatCheck.rows.length === 0) {
+                await pool.query(
+                    'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
+                    [chatId, otherUserName, 'private', Date.now()]
+                );
+                console.log('✅ Chat created:', chatId);
+                isNewChat = true;
+            } else {
+                // Обновляем время последней активности
+                await pool.query(
+                    'UPDATE chats SET timestamp = $1 WHERE id = $2',
+                    [Date.now(), chatId]
+                );
+                console.log('🔄 Chat updated:', chatId);
+            }
+            
+            // Получаем сообщения (если есть)
+            const messagesResult = await pool.query(
+                `SELECT * FROM messages 
+                WHERE chat_id = $1 
+                ORDER BY timestamp ASC 
+                LIMIT 100`,
+                [chatId]
+            );
+            
+            // Получаем актуальную информацию о чате
+            const updatedChatResult = await pool.query(
+                'SELECT id, name, type, timestamp FROM chats WHERE id = $1',
+                [chatId]
+            );
+            
+            const chat = updatedChatResult.rows[0] || {
                 id: chatId,
                 name: otherUserName,
                 type: 'private',
-                timestamp: Date.now(),
-                last_message: messagesResult.rows.length > 0 
-                    ? messagesResult.rows[messagesResult.rows.length - 1].text 
-                    : null
-            },
-            messages: messagesResult.rows,
-            messageCount: messagesResult.rows.length,
-            isNew: messagesResult.rows.length === 0
-        });
-        
-    } catch (error) {
-        console.error('❌ Error creating private chat:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка создания чата: ' + error.message 
-        });
+                timestamp: Date.now()
+            };
+            
+            // Последнее сообщение
+            let lastMessage = null;
+            if (messagesResult.rows.length > 0) {
+                lastMessage = messagesResult.rows[messagesResult.rows.length - 1].text;
+            }
+            
+            res.json({
+                success: true,
+                chatId: chatId,
+                chat: {
+                    id: chat.id,
+                    name: chat.name,
+                    type: chat.type,
+                    timestamp: chat.timestamp,
+                    last_message: lastMessage
+                },
+                messages: messagesResult.rows,
+                messageCount: messagesResult.rows.length,
+                isNew: isNewChat
+            });
+            
+        } catch (error) {
+            console.error('❌ Error creating private chat:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка создания чата: ' + error.message 
+            });
+        }
     }
-}
 
     // 👥 ПОЛУЧИТЬ ГРУППЫ
     async getGroups(req, res) {
