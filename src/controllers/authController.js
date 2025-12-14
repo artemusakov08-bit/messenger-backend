@@ -1,40 +1,46 @@
 const path = require('path');
-const JWT_SECRET = process.env.JWT_SECRET;
 const fs = require('fs');
-const jwt = require('jsonwebtoken'); 
-const db = require('../config/database'); 
-const { UserSecurity, VerificationCode } = require('../models'); 
 
+// 🔥 ЗАГРУЗКА .env САМОЙ ПЕРВОЙ
 const envPath = path.resolve(__dirname, '..', '..', '.env');
-console.log('📁 Текущая директория контроллера:', __dirname);
-console.log('📁 Путь к .env:', envPath);
-console.log('📁 .env существует?', fs.existsSync(envPath) ? '✅ ДА' : '❌ НЕТ');
+console.log('📁 === ЗАГРУЗКА .env ===');
+console.log('📁 Путь:', envPath);
+console.log('📁 Существует?', fs.existsSync(envPath) ? '✅ ДА' : '❌ НЕТ');
 
 require('dotenv').config({ path: envPath });
 
-
-console.log('🔑 === ПРОВЕРКА ЗАГРУЗКИ ===');
-console.log('🔑 JWT_SECRET загружен:', !!process.env.JWT_SECRET);
+// 🔥 ПРОВЕРКА ЗАГРУЗКИ
+console.log('🔑 === ПРОВЕРКА JWT_SECRET ===');
+console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
 
 if (process.env.JWT_SECRET) {
-    console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET.length);
-    console.log('🔑 JWT_SECRET (первые 5):', process.env.JWT_SECRET.substring(0, 5) + '...');
+    console.log('🔑 Длина:', process.env.JWT_SECRET.length);
+    console.log('🔑 Первые 5 символов:', process.env.JWT_SECRET.substring(0, 5) + '...');
 } else {
-    console.error('❌ JWT_SECRET НЕ ЗАГРУЖЕН!');
-    console.error('📋 Все переменные окружения:');
+    console.error('❌❌❌ JWT_SECRET НЕ ЗАГРУЖЕН!');
+    console.error('📋 Доступные переменные окружения:');
     Object.keys(process.env).forEach(key => {
-        if (key.includes('JWT') || key.includes('SECRET')) {
-            console.error(`  ${key}: ${process.env[key] ? 'ЕСТЬ' : 'НЕТ'}`);
-        }
+        console.error(`  ${key}: ${process.env[key] ? '****' : 'НЕТ'}`);
     });
+    throw new Error('JWT_SECRET не найден в .env файле! Проверь файл .env в корне проекта.');
 }
+
+// 🔥 СОЗДАЕМ КОНСТАНТУ JWT_SECRET
+const JWT_SECRET = process.env.JWT_SECRET;
+console.log('✅ JWT_SECRET создан');
+
+// 🔥 ТЕПЕРЬ ИМПОРТЫ
+const jwt = require('jsonwebtoken');
+const db = require('../config/database');
+const { UserSecurity, VerificationCode } = require('../models');
+
+console.log('🚀 AuthController инициализирован');
 
 class AuthController {
     async sendVerificationCode(req, res) {
         try {
             const { phone, type = 'sms' } = req.body;
-
-            console.log('📱 Sending verification code:', { phone, type });
+            console.log('📱 Отправка кода для:', phone);
 
             if (!phone) {
                 return res.status(400).json({ 
@@ -43,10 +49,8 @@ class AuthController {
                 });
             }
 
-            // Генерируем случайный 6-значный код
             const code = Math.floor(100000 + Math.random() * 900000).toString();
             
-            // Сохраняем код в базу
             await VerificationCode.create({
                 phone: phone,
                 code: code,
@@ -54,17 +58,17 @@ class AuthController {
                 expiresInMinutes: 10
             });
 
-            console.log('✅ Verification code generated:', { phone, code });
+            console.log('✅ Код создан:', { phone, code });
 
             res.json({
                 success: true,
                 message: 'Код подтверждения отправлен',
-                code: code, // Только для разработки
-                expiresIn: 10 // минут
+                code: code,
+                expiresIn: 10
             });
 
         } catch (error) {
-            console.error('❌ Send verification code error:', error);
+            console.error('❌ Ошибка отправки кода:', error);
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка отправки кода: ' + error.message 
@@ -76,8 +80,7 @@ class AuthController {
         const client = await db.getClient();
         try {
             const { phone } = req.body;
-
-            console.log('🔍 Checking user registration:', { phone });
+            console.log('🔍 Проверка регистрации:', phone);
 
             if (!phone) {
                 return res.status(400).json({ 
@@ -86,31 +89,24 @@ class AuthController {
                 });
             }
 
-            // Находим пользователя по телефону
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
                 [phone]
             );
 
             if (userResult.rows.length === 0) {
-                // 🔥 ПОЛЬЗОВАТЕЛЬ НЕ НАЙДЕН - возвращаем специальный статус
-                console.log('🆕 User not found, needs registration:', phone);
+                console.log('🆕 Пользователь не найден:', phone);
                 return res.status(200).json({ 
                     success: false,
-                    needsRegistration: true,  // ← КЛЮЧЕВОЕ ПОЛЕ
+                    needsRegistration: true,
                     error: 'Пользователь не найден. Требуется регистрация.' 
                 });
             }
 
             const user = userResult.rows[0];
-
-            // Получаем настройки безопасности
             const securitySettings = await UserSecurity.findByUserId(user.user_id);
 
-            console.log('✅ User found:', { 
-                userId: user.user_id, 
-                hasSecurity: !!securitySettings
-            });
+            console.log('✅ Пользователь найден:', user.user_id);
 
             res.json({
                 success: true,
@@ -131,7 +127,7 @@ class AuthController {
                 }
             });
         } catch (error) {
-            console.error('❌ Check user registration error:', error);
+            console.error('❌ Ошибка проверки регистрации:', error);
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка проверки пользователя: ' + error.message 
@@ -145,13 +141,7 @@ class AuthController {
         const client = await db.getClient();
         try {
             const { phone, displayName, username, role = 'user' } = req.body;
-
-            console.log('🆕 Registration request:', { 
-                phone, 
-                displayName, 
-                username, 
-                role
-            });
+            console.log('🆕 Регистрация:', { phone, displayName, username });
 
             if (!phone) {
                 return res.status(400).json({ 
@@ -160,7 +150,6 @@ class AuthController {
                 });
             }
 
-            // Проверяем существующего пользователя
             const existingUser = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
                 [phone]
@@ -173,7 +162,6 @@ class AuthController {
                 });
             }
 
-            // Автогенерация данных если не указаны
             const timestamp = Date.now();
             const userId = 'user_' + timestamp;
             const generatedUsername = username || phone;
@@ -203,23 +191,17 @@ class AuthController {
             );
 
             const newUser = result.rows[0];
-            console.log('✅ User registered:', { 
-                id: newUser.user_id, 
-                phone: newUser.phone,  
-                username: newUser.username 
-            });
+            console.log('✅ Пользователь зарегистрирован:', newUser.user_id);
 
-            // Создаем настройки безопасности
             await UserSecurity.createOrUpdate(newUser.user_id);
 
-            // Генерируем временный токен для завершения регистрации
             const tempToken = jwt.sign(
                 { 
                     userId: newUser.user_id,
                     type: 'registration',
                     phone: newUser.phone
                 },
-                process.env.JWT_SECRET,  
+                JWT_SECRET,
                 { expiresIn: '1h' }
             );
 
@@ -239,7 +221,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Registration error:', error);
+            console.error('❌ Ошибка регистрации:', error);
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка сервера при регистрации: ' + error.message 
@@ -252,27 +234,18 @@ class AuthController {
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
+            console.log('🔐 === НАЧАЛО ЛОГИНА ===');
             const { phone, code, type = 'sms' } = req.body;
+            console.log('📱 Данные:', { phone, code, type });
 
-            console.log('🔐 Verifying code and login:', { phone, code, type });
-
-            if (!phone) {
+            if (!phone || !code) {
                 return res.status(400).json({ 
                     success: false,
-                    error: 'Телефон обязателен' 
+                    error: 'Телефон и код обязательны' 
                 });
             }
 
-            if (!code) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Код подтверждения обязателен' 
-                });
-            }
-
-            console.log('📞 Using phone for verification:', phone);
-
-            // Проверяем код
+            console.log('🔍 Поиск кода для:', phone);
             const verificationCode = await VerificationCode.findOne({
                 phone: phone, 
                 code: code, 
@@ -280,7 +253,7 @@ class AuthController {
             });
 
             if (!verificationCode) {
-                console.log('❌ Code not found or expired for phone:', phone);
+                console.log('❌ Код не найден или истек');
                 return res.status(400).json({ 
                     success: false,
                     error: 'Неверный код подтверждения' 
@@ -301,10 +274,8 @@ class AuthController {
                 });
             }
 
-            // Помечаем код как использованный
             await VerificationCode.markAsUsed(verificationCode.id);
 
-            // Находим пользователя по телефону
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
                 [phone]
@@ -318,31 +289,28 @@ class AuthController {
             }
 
             const user = userResult.rows[0];
-
-            // Получаем настройки безопасности
             const securitySettings = await UserSecurity.findByUserId(user.user_id);
 
-            // Обновляем статус пользователя
             await client.query(
                 'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
                 ['online', Date.now(), user.user_id]
             );
 
+            console.log('🔑 Генерация токена с JWT_SECRET...');
+            console.log('🔑 JWT_SECRET длина:', JWT_SECRET.length);
+            
             const token = jwt.sign(
                 { 
                     userId: user.user_id, 
                     role: user.role,
                     phone: user.phone
                 },
-                JWT_SECRET,  
+                JWT_SECRET,
                 { expiresIn: '24h' }
             );
 
-            console.log('✅ Login successful:', { 
-                userId: user.user_id, 
-                phone: user.phone,
-                role: user.role 
-            });
+            console.log('✅ Логин успешен:', user.user_id);
+            console.log('✅ Токен сгенерирован, длина:', token.length);
 
             res.json({
                 success: true,
@@ -364,7 +332,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Verify code and login error:', error);
+            console.error('❌ Ошибка входа:', error);
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка входа: ' + error.message 
@@ -377,8 +345,7 @@ class AuthController {
     async verify2FACode(req, res) {
         try {
             const { userId, code } = req.body;
-
-            console.log('🔐 Verifying 2FA code:', { userId, code });
+            console.log('🔐 Проверка 2FA:', { userId, code });
 
             if (!userId || !code) {
                 return res.status(400).json({ 
@@ -387,7 +354,6 @@ class AuthController {
                 });
             }
 
-            // Получаем настройки безопасности
             const securitySettings = await UserSecurity.findByUserId(userId);
 
             if (!securitySettings || !securitySettings.two_fa_enabled) {
@@ -397,7 +363,6 @@ class AuthController {
                 });
             }
 
-            // Проверяем код 2FA
             const isValid2FACode = await this.validate2FACode(securitySettings.two_fa_secret, code);
 
             if (!isValid2FACode) {
@@ -413,11 +378,11 @@ class AuthController {
                     type: '2fa_verified',
                     verifiedAt: new Date()
                 },
-                process.env.JWT_SECRET,  
+                JWT_SECRET,
                 { expiresIn: '5m' }
             );
 
-            console.log('✅ 2FA verification successful:', { userId });
+            console.log('✅ 2FA проверка пройдена:', userId);
 
             res.json({
                 success: true,
@@ -426,7 +391,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Verify 2FA code error:', error);
+            console.error('❌ Ошибка проверки 2FA:', error);
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка проверки 2FA: ' + error.message 
@@ -444,7 +409,7 @@ class AuthController {
                 window: 2
             });
         } catch (error) {
-            console.error('2FA validation error:', error);
+            console.error('Ошибка валидации 2FA:', error);
             return /^\d{6}$/.test(code);
         }
     }
@@ -452,8 +417,7 @@ class AuthController {
     async getAuthRequirements(req, res) {
         try {
             const { phone } = req.params;
-            
-            console.log('🔍 Getting auth requirements for:', phone);
+            console.log('🔍 Требования аутентификации для:', phone);
 
             const userResult = await db.query(
                 'SELECT * FROM users WHERE phone = $1',
@@ -493,7 +457,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Get auth requirements error:', error);
+            console.error('❌ Ошибка получения требований:', error);
             res.status(500).json({ 
                 success: false,
                 error: error.message 
@@ -543,7 +507,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Get user by ID error:', error);
+            console.error('❌ Ошибка получения пользователя:', error);
             res.status(500).json({ 
                 success: false,
                 error: error.message 
@@ -564,7 +528,7 @@ class AuthController {
             });
 
         } catch (error) {
-            console.error('❌ Clean expired codes error:', error);
+            console.error('❌ Ошибка очистки кодов:', error);
             res.status(500).json({ 
                 success: false,
                 error: error.message 
