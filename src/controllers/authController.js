@@ -1,4 +1,5 @@
 const path = require('path');
+const JWT_SECRET = process.env.JWT_SECRET;
 const fs = require('fs');
 const jwt = require('jsonwebtoken'); 
 const db = require('../config/database'); 
@@ -10,6 +11,7 @@ console.log('📁 Путь к .env:', envPath);
 console.log('📁 .env существует?', fs.existsSync(envPath) ? '✅ ДА' : '❌ НЕТ');
 
 require('dotenv').config({ path: envPath });
+
 
 console.log('🔑 === ПРОВЕРКА ЗАГРУЗКИ ===');
 console.log('🔑 JWT_SECRET загружен:', !!process.env.JWT_SECRET);
@@ -27,7 +29,6 @@ if (process.env.JWT_SECRET) {
     });
 }
 
-const JWT_SECRET = process.env.JWT_SECRET;
 class AuthController {
     async sendVerificationCode(req, res) {
         try {
