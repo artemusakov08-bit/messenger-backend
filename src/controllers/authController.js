@@ -1,12 +1,21 @@
+const path = require('path');
+const envPath = path.resolve(__dirname, '..', '..', '.env');
+console.log('📁 Путь к .env:', envPath);
+require('dotenv').config({ path: envPath });
+console.log('🔑 === ПРОВЕРКА ЗАГРУЗКИ ===');
+console.log('🔑 JWT_SECRET загружен:', !!process.env.JWT_SECRET);
+console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 'НЕТ');
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('❌❌❌ JWT_SECRET не загружен! Проверь .env файл');
+}
+
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const { UserSecurity, VerificationCode } = require('../models');
 
-// 🔥 ЗАГРУЗКА .env ФАЙЛА
 require('dotenv').config();
-
-// 🔥 ПРОВЕРКА И ФИКС JWT_SECRET
-const JWT_SECRET = process.env.JWT_SECRET || 'development_secret_key_for_testing_only_2025';
 
 if (!process.env.JWT_SECRET) {
     console.error('⚠️  ВНИМАНИЕ: JWT_SECRET не найден в .env, использую dev ключ');
@@ -313,14 +322,13 @@ class AuthController {
                 ['online', Date.now(), user.user_id]
             );
 
-            // Генерируем токен
             const token = jwt.sign(
                 { 
                     userId: user.user_id, 
                     role: user.role,
                     phone: user.phone
                 },
-                process.env.JWT_SECRET, 
+                JWT_SECRET,  
                 { expiresIn: '24h' }
             );
 
