@@ -1,7 +1,18 @@
-// /app/src/controllers/authController.js
-const db = require('../config/database');
 const jwt = require('jsonwebtoken');
+const db = require('../config/database');
 const { UserSecurity, VerificationCode } = require('../models');
+
+// 🔥 ЗАГРУЗКА .env ФАЙЛА
+require('dotenv').config();
+
+// 🔥 ПРОВЕРКА И ФИКС JWT_SECRET
+const JWT_SECRET = process.env.JWT_SECRET || 'development_secret_key_for_testing_only_2025';
+
+if (!process.env.JWT_SECRET) {
+    console.error('⚠️  ВНИМАНИЕ: JWT_SECRET не найден в .env, использую dev ключ');
+} else {
+    console.log('✅ JWT_SECRET загружен, длина:', process.env.JWT_SECRET.length);
+}
 
 class AuthController {
     async sendVerificationCode(req, res) {

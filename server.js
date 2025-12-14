@@ -1,3 +1,9 @@
+require('dotenv').config({ path: '.env' });
+
+console.log('🚀 ===== ЗАПУСК СЕРВЕРА =====');
+console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
+console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 'НЕТ');
+
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
