@@ -1,5 +1,8 @@
 const path = require('path');
 const fs = require('fs');
+const jwt = require('jsonwebtoken'); 
+const db = require('../config/database'); 
+const { UserSecurity, VerificationCode } = require('../models'); 
 
 const envPath = path.resolve(__dirname, '..', '..', '.env');
 console.log('📁 Текущая директория контроллера:', __dirname);
@@ -24,6 +27,7 @@ if (process.env.JWT_SECRET) {
     });
 }
 
+const JWT_SECRET = process.env.JWT_SECRET;
 class AuthController {
     async sendVerificationCode(req, res) {
         try {
