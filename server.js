@@ -2,7 +2,6 @@ require('dotenv').config({ path: '.env' });
 
 console.log('🚀 ===== ЗАПУСК СЕРВЕРА =====');
 console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
-console.log('🔑 Длина JWT_SECRET:', process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 'НЕТ');
 
 const express = require('express');
 const { Pool } = require('pg');
@@ -32,13 +31,6 @@ const port = process.env.PORT || 10000;
 
 // 🔥 ЗАГРУЗКА .env ФАЙЛА
 require('dotenv').config();
-
-// 🔥 ПРОВЕРКА JWT_SECRET
-if (!process.env.JWT_SECRET) {
-    console.error('❌ ОШИБКА: JWT_SECRET не найден в .env файле');
-    console.log('📁 Текущая директория:', __dirname);
-    console.log('🔍 Ищу .env в:', require('path').resolve(__dirname, '.env'));
-}
 
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
@@ -597,37 +589,47 @@ io.on('connection', (socket) => {
 // Отправка сообщения через WebSocket
 socket.on('send_message', async (messageData) => {
   try {
-    console.log('💬 WebSocket сообщение получено:', messageData);
+    console.log('🔥 === НОВОЕ СООБЩЕНИЕ ===');
+    console.log('🔥 Данные:', JSON.stringify(messageData, null, 2));
     
-    // ⬇️ ВАЖНО: Используем ТЕ ЖЕ КЛЮЧИ, что и во фронтенде
     const chatId = messageData.chat_id || messageData.chatId || '';
     const text = messageData.text || '';
     const senderId = messageData.sender_id || messageData.senderId || '';
     const senderName = messageData.sender_name || messageData.senderName || 'Вы';
     const type = messageData.type || 'text';
 
-    console.log('📊 Парсинг полей:', { 
-      chatId, 
-      text, 
-      senderId, 
-      senderName, 
-      type 
-    });
+    console.log('🔥 Парсинг:', { chatId, text, senderId, senderName, type });
 
-    // ВАЛИДАЦИЯ
     if (!chatId || !text || !senderId) {
       console.error('❌ Недостаточно данных');
       socket.emit('message_error', { error: 'Missing required fields' });
       return;
     }
 
-    // ⬇️ ПРОСТАЯ ЛОГИКА БЕЗ СОХРАНЕНИЯ В БАЗУ (для теста)
     const messageId = 'msg_' + Date.now();
     const timestamp = Date.now();
     
-    console.log('✅ Создано сообщение:', { messageId, chatId, senderId });
+    try {
+      const result = await pool.query(
+        `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, type, timestamp) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [messageId, chatId, text, senderId, senderName, type, timestamp]
+      );
+      console.log('✅ Сообщение сохранено в БД:', messageId);
+    } catch (dbError) {
+      console.error('❌ Ошибка сохранения в БД:', dbError.message);
+    }
 
-    // ⬇️ 1. Отправляем ВСЕМ в чате (включая отправителя)
+    try {
+      await pool.query(
+        'UPDATE chats SET timestamp = $1 WHERE id = $2',
+        [timestamp, chatId]
+      );
+      console.log('✅ Время чата обновлено:', chatId);
+    } catch (updateError) {
+      console.error('❌ Ошибка обновления чата:', updateError.message);
+    }
+
     const messageToSend = {
       id: messageId,
       chat_id: chatId,
@@ -639,18 +641,57 @@ socket.on('send_message', async (messageData) => {
       status: 'DELIVERED'
     };
     
-    // Отправляем в комнату чата всем участникам
+    console.log('🔥 Сообщение для отправки:', JSON.stringify(messageToSend, null, 2));
+    
     io.to(chatId).emit('new_message', messageToSend);
-    console.log(`📤 Отправлено сообщение в комнату ${chatId} всем участникам`);
-
-    // ⬇️ 2. Отправляем подтверждение отправителю
+    console.log(`📤 Отправлено в комнату ${chatId} всем участникам`);
+    
+    if (chatId.includes('_')) {
+      const parts = chatId.split('_');
+      if (parts.length >= 2) {
+        const user1 = parts[0];
+        const user2 = parts[1];
+        
+        // 🔥 ОПРЕДЕЛЯЕМ ПОЛУЧАТЕЛЯ
+        const receiverId = senderId === user1 ? user2 : user1;
+        
+        // 🔥 НАХОДИМ SOCKET ПОЛУЧАТЕЛЯ И ОТПРАВЛЯЕМ НАПРЯМУЮ
+        const receiverSocketId = connectedUsers.get(receiverId);
+        if (receiverSocketId) {
+          io.to(receiverSocketId).emit('new_message', messageToSend);
+          console.log(`✅ Отправлено напрямую пользователю ${receiverId} (socket: ${receiverSocketId})`);
+        } else {
+          console.log(`⚠️ Пользователь ${receiverId} не онлайн`);
+          
+          try {
+            await pool.query(
+              `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                'notif_' + Date.now(),
+                receiverId,
+                'new_message',
+                'Новое сообщение',
+                `${senderName}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`,
+                JSON.stringify({ chatId, messageId }),
+                timestamp
+              ]
+            );
+            console.log(`💾 Уведомление сохранено для ${receiverId}`);
+          } catch (notifError) {
+            console.error('❌ Ошибка сохранения уведомления:', notifError.message);
+          }
+        }
+      }
+    }
+    
     socket.emit('message_sent', {
       messageId: messageId,
       chatId: chatId,
       status: 'SENT',
       isMine: true
     });
-    console.log(`📩 Отправлено подтверждение отправителю`);
+    console.log(`📩 Отправлено подтверждение отправителю ${senderId}`);
 
   } catch (error) {
     console.error('❌ Ошибка обработки сообщения:', error);
