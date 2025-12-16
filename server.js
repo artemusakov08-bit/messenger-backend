@@ -129,7 +129,6 @@ async function initializeDatabase() {
         )
     `);
     
-  // 🔥 ДОБАВЛЯЕМ ОТСУТСТВУЮЩИЕ КОЛОНКИ (ЕСЛИ ТАБЛИЦА УЖЕ СУЩЕСТВУЕТ)
   const alterColumns = [
       'bio TEXT',
       'profile_image TEXT',
@@ -153,7 +152,6 @@ async function initializeDatabase() {
       }
   }
 
-    // 🔥 ПОТОМ создаем user_security с foreign key
     await db.query(`
       CREATE TABLE IF NOT EXISTS user_security (
         id VARCHAR(50) PRIMARY KEY,
@@ -176,7 +174,6 @@ async function initializeDatabase() {
       )
     `);
 
-    // Таблица кодов верификации
     await db.query(`
       CREATE TABLE IF NOT EXISTS verification_codes (
         id VARCHAR(50) PRIMARY KEY,
@@ -212,7 +209,6 @@ async function initializeDatabase() {
       )
     `);
     
-    // Создаем таблицы для групп
     await db.query(`
       CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
@@ -232,7 +228,6 @@ async function initializeDatabase() {
       )
     `);
 
-    // Таблица для звонков
     await db.query(`
       CREATE TABLE IF NOT EXISTS calls (
         id TEXT PRIMARY KEY,
@@ -248,10 +243,21 @@ async function initializeDatabase() {
       )
     `);
 
-    // 🆕 ТАБЛИЦЫ ДЛЯ МОДЕРАЦИИ
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        title VARCHAR(255),
+        body TEXT,
+        data JSONB,
+        is_read BOOLEAN DEFAULT false,
+        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+      )
+    `);
+
     console.log('🔄 Creating moderation tables...');
     
-    // Таблица жалоб
     await db.query(`
       CREATE TABLE IF NOT EXISTS reports (
         id VARCHAR(50) PRIMARY KEY,
@@ -270,7 +276,6 @@ async function initializeDatabase() {
       )
     `);
     
-    // Действия модерации
     await db.query(`
       CREATE TABLE IF NOT EXISTS moderation_actions (
         id VARCHAR(50) PRIMARY KEY,
@@ -283,7 +288,6 @@ async function initializeDatabase() {
       )
     `);
     
-    // Шаблонные ответы
     await db.query(`
       CREATE TABLE IF NOT EXISTS template_responses (
         id VARCHAR(50) PRIMARY KEY,
@@ -295,7 +299,6 @@ async function initializeDatabase() {
       )
     `);
     
-    // Аудит действий
     await db.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(50) PRIMARY KEY,
@@ -317,7 +320,6 @@ async function initializeDatabase() {
     
   } catch (error) {
     console.error('❌ Database initialization error:', error);
-    // Не бросаем ошибку дальше, чтобы приложение могло работать
     console.log('⚠️  Application will continue with limited functionality');
   }
 }
