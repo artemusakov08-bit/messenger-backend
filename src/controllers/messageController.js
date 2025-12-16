@@ -15,47 +15,60 @@ const sendMessage = async (req, res) => {
         const { chatId, text, senderId, senderName, type = 'text' } = req.body;
         
         if (!chatId || !text || !senderId || !senderName) {
+            await connection.query('ROLLBACK');
             return res.status(400).json({
                 error: 'Missing required fields: chatId, text, senderId, senderName'
             });
         }
 
-        console.log(`📤 Отправка сообщения: чат=${chatId}, от=${senderId}, текст="${text.substring(0, 50)}..."`);
+        console.log(`📤 Отправка сообщения: чат=${chatId}, от=${senderId}`);
 
+        // 1. СОЗДАЕМ ИЛИ ОБНОВЛЯЕМ ЧАТ
         const chatCheck = await connection.query(
             'SELECT id FROM chats WHERE id = $1',
             [chatId]
         );
         
         if (chatCheck.rows.length === 0) {
+            // Получаем ID второго пользователя
             const parts = chatId.split('_');
             const otherUserId = parts.find(id => id !== senderId);
             
-            if (!otherUserId) {
-                throw new Error(`Invalid chat ID format: ${chatId}`);
+            let otherUserName = 'Приватный чат';
+            
+            if (otherUserId) {
+                const userResult = await connection.query(
+                    'SELECT display_name FROM users WHERE user_id = $1',
+                    [otherUserId]
+                );
+                
+                otherUserName = userResult.rows.length > 0 
+                    ? userResult.rows[0].display_name 
+                    : `User ${otherUserId.substring(otherUserId.length - 4)}`;
             }
             
-            const userResult = await connection.query(
-                'SELECT display_name FROM users WHERE user_id = $1',
-                [otherUserId]
-            );
-            
-            const otherUserName = userResult.rows.length > 0 
-                ? userResult.rows[0].display_name 
-                : `User ${otherUserId.substring(otherUserId.length - 4)}`;
-            
+            // СОЗДАЕМ ЧАТ
             await connection.query(
-                'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                [chatId, otherUserName, 'private', Date.now()]
+                `INSERT INTO chats (id, name, type, timestamp, last_message) 
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [chatId, otherUserName, 'private', Date.now(), text]
             );
             
-            console.log(`✅ Создан новый чат: ${chatId} с ${otherUserName}`);
+            console.log(`✅ Чат создан: ${chatId} (${otherUserName})`);
             
-            if (chatSocketInstance && chatSocketInstance.notifyChatCreated) {
-                chatSocketInstance.notifyChatCreated(chatId, otherUserName, parts);
-            }
+        } else {
+            // 🔥 КРИТИЧЕСКИ ВАЖНО: ОБНОВЛЯЕМ timestamp И last_message
+            await connection.query(
+                `UPDATE chats 
+                 SET timestamp = $1, last_message = $2 
+                 WHERE id = $3`,
+                [Date.now(), text, chatId]
+            );
+            
+            console.log(`🔄 Чат обновлен: ${chatId}`);
         }
 
+        // 2. СОХРАНЯЕМ СООБЩЕНИЕ
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
         
         const messageResult = await connection.query(
@@ -67,37 +80,22 @@ const sendMessage = async (req, res) => {
 
         const savedMessage = messageResult.rows[0];
         
-        await connection.query(
-            'UPDATE chats SET timestamp = $1 WHERE id = $2',
-            [Date.now(), chatId]
-        );
-        
         await connection.query('COMMIT');
         
-        console.log(`✅ Сообщение сохранено в БД: ${messageId}`);
+        console.log(`✅ Сообщение сохранено: ${messageId}`);
         
-        if (chatSocketInstance) {
-            if (chatSocketInstance.broadcastToChat) {
-                console.log(`📤 Рассылка через WebSocket в чат: ${chatId}`);
-                
-                const messageForSocket = {
-                    type: 'new_message',
-                    chatId: savedMessage.chat_id,
-                    message: {
-                        id: savedMessage.id,
-                        chat_id: savedMessage.chat_id,
-                        text: savedMessage.text,
-                        sender_id: savedMessage.sender_id,
-                        sender_name: savedMessage.sender_name,
-                        timestamp: savedMessage.timestamp,
-                        type: savedMessage.type
-                    },
-                    timestamp: Date.now()
-                };
-                
-                chatSocketInstance.broadcastToChat(chatId, messageForSocket);
-            }
+        // 3. ОТПРАВЛЯЕМ ЧЕРЕЗ WEBSOCKET
+        if (chatSocketInstance && chatSocketInstance.broadcastToChat) {
+            console.log(`📤 Рассылка через WebSocket: ${chatId}`);
             
+            chatSocketInstance.broadcastToChat(chatId, {
+                type: 'new_message',
+                chatId: savedMessage.chat_id,
+                message: savedMessage,
+                timestamp: Date.now()
+            });
+            
+            // 🔥 УВЕДОМЛЯЕМ ОБ ОБНОВЛЕНИИ СПИСКА ЧАТОВ
             if (chatSocketInstance.notifyChatListUpdate) {
                 chatSocketInstance.notifyChatListUpdate(chatId);
             }

@@ -2,48 +2,62 @@ const pool = require('../config/database');
 
 class ChatController {
     // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
-async getUserChats(req, res) {
-    try {
-        const userId = req.user.user_id;
-        console.log('💬 Getting user chats for user:', userId);
+    async getUserChats(req, res) {
+        try {
+            const userId = req.user.user_id;
+            console.log('💬 Getting user chats for user:', userId);
 
-        // 🔥 1. Получаем все уникальные чаты
-        const messagesQuery = `
-            SELECT DISTINCT 
-                chat_id,
-                MAX(timestamp) as last_message_time
-            FROM messages 
-            WHERE chat_id LIKE '%' || $1 || '%'
-            GROUP BY chat_id
-        `;
-        
-        const messagesResult = await pool.query(messagesQuery, [userId]);
-        console.log(`📨 Found ${messagesResult.rows.length} chat IDs from messages`);
-        
-        let allChats = [];
-        
-        // 🔥 2. Обрабатываем каждый чат
-        for (const row of messagesResult.rows) {
-            const chatId = row.chat_id;
+            const messagesQuery = `
+                SELECT DISTINCT ON (m.chat_id)
+                    m.chat_id,
+                    MAX(m.timestamp) as last_message_time,
+                    (SELECT text FROM messages 
+                    WHERE chat_id = m.chat_id 
+                    ORDER BY timestamp DESC LIMIT 1) as last_message_text
+                FROM messages m
+                WHERE m.chat_id LIKE $1 OR m.chat_id LIKE $2 OR m.chat_id LIKE $3
+                GROUP BY m.chat_id
+                ORDER BY m.chat_id, MAX(m.timestamp) DESC
+            `;
             
-            try {
-                // Проверяем есть ли чат в таблице chats
+            const messagesResult = await pool.query(messagesQuery, [
+                `%${userId}%`,
+                `${userId}_%`,
+                `%_${userId}`
+            ]);
+            
+            console.log(`📨 Found ${messagesResult.rows.length} chats with messages`);
+            
+            const allChats = [];
+            
+            for (const row of messagesResult.rows) {
+                const chatId = row.chat_id;
+                
+                // Получаем информацию о чате из таблицы chats
                 const chatResult = await pool.query(
-                    'SELECT id, name, type, timestamp FROM chats WHERE id = $1',
+                    'SELECT id, name, type, timestamp, last_message FROM chats WHERE id = $1',
                     [chatId]
                 );
                 
-                let chatName = 'Приватный чат';
-                let chatTimestamp = row.last_message_time || Date.now();
+                let chatData = {
+                    id: chatId,
+                    name: 'Приватный чат',
+                    type: 'private',
+                    timestamp: row.last_message_time || Date.now(),
+                    last_message: row.last_message_text || '',
+                    member_count: 2
+                };
                 
+                // Если чат есть в таблице chats - берем данные оттуда
                 if (chatResult.rows.length > 0) {
-                    // Чат есть в таблице chats
                     const dbChat = chatResult.rows[0];
-                    chatName = dbChat.name || 'Приватный чат';
-                    chatTimestamp = dbChat.timestamp || row.last_message_time;
+                    chatData.name = dbChat.name || chatData.name;
+                    chatData.type = dbChat.type || chatData.type;
+                    chatData.timestamp = dbChat.timestamp || chatData.timestamp;
+                    chatData.last_message = dbChat.last_message || chatData.last_message;
                 } else {
                     // 🔥 ВАЖНО: Если чата нет в таблице chats, но есть сообщения - создаем его
-                    console.log(`⚠️  Chat ${chatId} not in chats table, creating...`);
+                    console.log(`⚠️ Chat ${chatId} not in chats table, creating...`);
                     
                     // Получаем ID второго пользователя
                     const parts = chatId.split('_');
@@ -64,106 +78,75 @@ async getUserChats(req, res) {
                         );
                         
                         if (userResult.rows.length > 0) {
-                            chatName = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
+                            chatData.name = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
                         }
                     }
                     
                     // 🔥 СОЗДАЕМ ЧАТ В ТАБЛИЦЕ CHATS
                     await pool.query(
-                        'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
-                        [chatId, chatName, 'private', chatTimestamp]
+                        'INSERT INTO chats (id, name, type, timestamp, last_message) VALUES ($1, $2, $3, $4, $5)',
+                        [chatId, chatData.name, chatData.type, chatData.timestamp, chatData.last_message]
                     );
-                    console.log(`✅ Chat created in DB: ${chatId} (${chatName})`);
+                    console.log(`✅ Chat created in DB: ${chatId} (${chatData.name})`);
                 }
                 
-                // 🔥 3. Получаем последнее сообщение
-                const lastMessageResult = await pool.query(
-                    'SELECT text FROM messages WHERE chat_id = $1 ORDER BY timestamp DESC LIMIT 1',
-                    [chatId]
-                );
-                
-                let lastMessage = '';
-                if (lastMessageResult.rows.length > 0) {
-                    lastMessage = lastMessageResult.rows[0].text;
-                }
-                
-                // 🔥 4. Формируем объект чата
-                allChats.push({
-                    id: chatId,
-                    name: chatName,
-                    type: 'private',
-                    timestamp: chatTimestamp,
-                    last_message: lastMessage,
-                    member_count: 2
-                });
-                
-            } catch (error) {
-                console.error(`❌ Error processing chat ${row.chat_id}:`, error.message);
+                allChats.push(chatData);
             }
-        }
-        
-        // 🔥 5. Также добавляем чаты из таблицы chats (на случай если нет сообщений)
-        const directChatsQuery = `
-            SELECT id, name, type, timestamp 
-            FROM chats 
-            WHERE id LIKE '%' || $1 || '%'
-        `;
-        
-        const directChatsResult = await pool.query(directChatsQuery, [userId]);
-        
-        for (const chat of directChatsResult.rows) {
-            // Проверяем нет ли уже такого чата в списке
-            const existingChat = allChats.find(c => c.id === chat.id);
-            if (!existingChat) {
-                // Получаем последнее сообщение
-                const lastMessageResult = await pool.query(
-                    'SELECT text FROM messages WHERE chat_id = $1 ORDER BY timestamp DESC LIMIT 1',
-                    [chat.id]
-                );
-                
-                let lastMessage = '';
-                if (lastMessageResult.rows.length > 0) {
-                    lastMessage = lastMessageResult.rows[0].text;
-                }
-                
+            
+            // 🔥 3. Также добавляем чаты из таблицы chats (на случай если есть чат, но нет сообщений)
+            const directChatsQuery = `
+                SELECT id, name, type, timestamp, last_message 
+                FROM chats 
+                WHERE id LIKE '%' || $1 || '%'
+                AND id NOT IN (${allChats.map((_, i) => `$${i + 2}`).join(',')})
+            `;
+            
+            const params = [userId];
+            allChats.forEach(chat => params.push(chat.id));
+            
+            const directChatsResult = await pool.query(directChatsQuery, params);
+            
+            for (const chat of directChatsResult.rows) {
                 allChats.push({
                     id: chat.id,
-                    name: chat.name,
-                    type: chat.type,
-                    timestamp: chat.timestamp,
-                    last_message: lastMessage,
+                    name: chat.name || 'Приватный чат',
+                    type: chat.type || 'private',
+                    timestamp: chat.timestamp || Date.now(),
+                    last_message: chat.last_message || '',
                     member_count: 2
                 });
             }
+            
+            // 🔥 4. СОРТИРУЕМ ПО ВРЕМЕНИ (новые сверху)
+            allChats.sort((a, b) => {
+                const timeA = a.timestamp || 0;
+                const timeB = b.timestamp || 0;
+                return timeB - timeA; // DESC order
+            });
+            
+            console.log(`✅ Total ${allChats.length} chats for user ${userId}`);
+            
+            // 🔥 5. Детальный лог для отладки
+            console.log('📊 Список чатов:');
+            allChats.forEach((chat, i) => {
+                const time = chat.timestamp ? new Date(chat.timestamp).toISOString() : 'no time';
+                console.log(`${i+1}. ${chat.id} - "${chat.name}" - time: ${time} - last: "${chat.last_message?.substring(0, 30)}"`);
+            });
+            
+            // 🔥 6. Отдаем результат
+            res.json({
+                success: true,
+                chats: allChats
+            });
+            
+        } catch (error) {
+            console.error('❌ Error getting user chats:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка получения чатов: ' + error.message 
+            });
         }
-        
-        // 🔥 6. Сортируем по времени (новые сверху)
-        allChats.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-        
-        console.log(`✅ Total ${allChats.length} chats for user ${userId}`);
-        
-        // 🔥 7. Логируем для отладки
-        allChats.forEach((chat, i) => {
-            const shortLastMsg = chat.last_message 
-                ? (chat.last_message.length > 30 ? chat.last_message.substring(0, 30) + '...' : chat.last_message)
-                : 'нет сообщений';
-            console.log(`${i+1}. ${chat.id} - "${chat.name}" - last: "${shortLastMsg}"`);
-        });
-        
-        // 🔥 8. Отдаем результат
-        res.json({
-            success: true,
-            chats: allChats
-        });
-        
-    } catch (error) {
-        console.error('❌ Error getting user chats:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка получения чатов: ' + error.message 
-        });
     }
-}
 
     // 💬 СОЗДАТЬ ПРИВАТНЫЙ ЧАТ
     async createPrivateChat(req, res) {

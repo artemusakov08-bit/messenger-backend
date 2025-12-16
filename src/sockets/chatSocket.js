@@ -227,6 +227,10 @@ class ChatSocket {
         try {
             const { chatId, text, type = 'text', senderName } = messageData;
             
+            console.log(`📤 ${userId} отправляет сообщение в ${chatId}`);
+
+            await this.updateChatTimestamp(chatId, text);
+            
             console.log(`📤 ${userId} отправляет сообщение в ${chatId}: "${text.substring(0, 50)}..."`);
             
             // Проверяем доступ к чату
@@ -285,6 +289,55 @@ class ChatSocket {
                 error: error.message,
                 timestamp: Date.now()
             });
+        }
+    }
+
+    async updateChatTimestamp(chatId, lastMessage = null) {
+        try {
+            const pool = require('../config/database');
+            
+            const chatCheck = await pool.query(
+                'SELECT id FROM chats WHERE id = $1',
+                [chatId]
+            );
+            
+            if (chatCheck.rows.length === 0) {
+                // Если чата нет, получаем участников и создаем
+                const parts = chatId.split('_');
+                const [userId1, userId2] = parts;
+                
+                // Получаем имя второго пользователя
+                const userResult = await pool.query(
+                    'SELECT display_name FROM users WHERE user_id = $1',
+                    [userId2]
+                );
+                
+                const chatName = userResult.rows.length > 0 
+                    ? userResult.rows[0].display_name 
+                    : `User ${userId2.slice(-4)}`;
+                
+                await pool.query(
+                    `INSERT INTO chats (id, name, type, timestamp, last_message) 
+                    VALUES ($1, $2, $3, $4, $5)`,
+                    [chatId, chatName, 'private', Date.now(), lastMessage]
+                );
+            } else {
+                // Обновляем существующий чат
+                const updateQuery = lastMessage 
+                    ? `UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3`
+                    : `UPDATE chats SET timestamp = $1 WHERE id = $2`;
+                
+                const params = lastMessage 
+                    ? [Date.now(), lastMessage, chatId]
+                    : [Date.now(), chatId];
+                    
+                await pool.query(updateQuery, params);
+            }
+            
+            console.log(`✅ Чат ${chatId} обновлен`);
+            
+        } catch (error) {
+            console.error(`❌ Ошибка обновления чата ${chatId}:`, error);
         }
     }
 
