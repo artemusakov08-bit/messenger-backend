@@ -118,99 +118,140 @@ class AuthController {
         }
     }
 
-    async register(req, res) {
-        const client = await db.getClient();
-        try {
-            const { phone, displayName, username, role = 'user' } = req.body;
-            console.log('🆕 Регистрация:', { phone, displayName, username });
+async register(req, res) {
+    const client = await db.getClient();
+    try {
+        const { phone, displayName, username, role = 'user' } = req.body;
+        console.log('🆕 Регистрация:', { phone, displayName, username });
 
-            if (!phone) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Телефон обязателен' 
-                });
-            }
-
-            const existingUser = await client.query(
-                'SELECT * FROM users WHERE phone = $1',
-                [phone]
-            );
-
-            if (existingUser.rows.length > 0) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Пользователь с таким телефоном уже существует' 
-                });
-            }
-
-            const timestamp = Date.now();
-            const userId = 'user_' + timestamp;
-            const generatedUsername = username || phone;
-            const generatedDisplayName = displayName || "User " + phone.slice(-4);
-            const userRole = role;
-            const authLevel = 'sms_only';
-
-            const result = await client.query(
-                `INSERT INTO users (
-                    user_id, phone, username, display_name, 
-                    role, is_premium, is_banned, warnings, auth_level,
-                    status, last_seen
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-                [
-                    userId, 
-                    phone,
-                    generatedUsername, 
-                    generatedDisplayName,
-                    userRole,
-                    false,
-                    false,
-                    0,
-                    authLevel,
-                    'offline',
-                    Date.now()
-                ]
-            );
-
-            const newUser = result.rows[0];
-            console.log('✅ Пользователь зарегистрирован:', newUser.user_id);
-
-            await UserSecurity.createOrUpdate(newUser.user_id);
-
-            const tempToken = jwt.sign(
-                { 
-                    userId: newUser.user_id,
-                    type: 'registration',
-                    phone: newUser.phone
-                },
-                JWT_SECRET,
-                { expiresIn: '1h' }
-            );
-
-            res.status(201).json({
-                success: true,
-                message: 'Пользователь успешно зарегистрирован',
-                tempToken: tempToken,
-                user: {
-                    id: newUser.user_id,
-                    phone: newUser.phone,
-                    username: newUser.username,
-                    displayName: newUser.display_name,
-                    role: newUser.role,
-                    is_premium: newUser.is_premium,
-                    authLevel: newUser.auth_level
-                }
-            });
-
-        } catch (error) {
-            console.error('❌ Ошибка регистрации:', error);
-            res.status(500).json({ 
+        if (!phone) {
+            return res.status(400).json({ 
                 success: false,
-                error: 'Ошибка сервера при регистрации: ' + error.message 
+                error: 'Телефон обязателен' 
             });
-        } finally {
-            client.release();
         }
+
+        // 1. Проверяем, нет ли пользователя с таким телефоном
+        const existingUser = await client.query(
+            'SELECT * FROM users WHERE phone = $1',
+            [phone]
+        );
+
+        if (existingUser.rows.length > 0) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Пользователь с таким телефоном уже существует' 
+            });
+        }
+
+        // 🔥 2. ПРОВЕРЯЕМ УНИКАЛЬНОСТЬ USERNAME
+        const generatedUsername = username || phone;
+        
+        if (username) { // Если пользователь указал username, проверяем его
+            console.log(`🔍 Проверяем username: ${username}`);
+            
+            const existingUsername = await client.query(
+                'SELECT * FROM users WHERE username = $1',
+                [username]
+            );
+
+            if (existingUsername.rows.length > 0) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Этот username уже занят' 
+                });
+            }
+        }
+
+        const timestamp = Date.now();
+        const userId = 'user_' + timestamp;
+        const generatedDisplayName = displayName || "User " + phone.slice(-4);
+        const userRole = role;
+        const authLevel = 'sms_only';
+
+        const result = await client.query(
+            `INSERT INTO users (
+                user_id, phone, username, display_name, 
+                role, is_premium, is_banned, warnings, auth_level,
+                status, last_seen
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+            [
+                userId, 
+                phone,
+                generatedUsername, // Используем username или phone
+                generatedDisplayName,
+                userRole,
+                false,
+                false,
+                0,
+                authLevel,
+                'offline',
+                Date.now()
+            ]
+        );
+
+        const newUser = result.rows[0];
+        console.log('✅ Пользователь зарегистрирован:', { 
+            userId: newUser.user_id, 
+            username: newUser.username 
+        });
+
+        await UserSecurity.createOrUpdate(newUser.user_id);
+
+        const tempToken = jwt.sign(
+            { 
+                userId: newUser.user_id,
+                type: 'registration',
+                phone: newUser.phone
+            },
+            JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'Пользователь успешно зарегистрирован',
+            tempToken: tempToken,
+            user: {
+                id: newUser.user_id,
+                phone: newUser.phone,
+                username: newUser.username,
+                displayName: newUser.display_name,
+                role: newUser.role,
+                is_premium: newUser.is_premium,
+                authLevel: newUser.auth_level
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Ошибка регистрации:', error);
+        
+        if (error.code === '23505') {
+            const constraint = error.constraint;
+            
+            if (constraint && constraint.includes('username')) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Этот username уже занят. Выберите другой.' 
+                });
+            }
+            
+            if (constraint && constraint.includes('phone')) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Этот телефон уже зарегистрирован' 
+                });
+            }
+        }
+        
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка сервера при регистрации: ' + error.message 
+        });
+    } finally {
+        client.release();
     }
+}
 
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
