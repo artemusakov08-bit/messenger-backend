@@ -292,6 +292,25 @@ class ChatSocket {
         }
     }
 
+    getChatParticipants(chatId) {
+        try {
+            const parts = chatId.split('_');
+            
+            if (parts.length < 4) {
+                console.error('❌ Неверный формат chatId:', chatId);
+                return [];
+            }
+            
+            const user1 = parts[0] + '_' + parts[1];  
+            const user2 = parts[2] + '_' + parts[3];  
+            
+            return [user1, user2];
+        } catch (error) {
+            console.error('❌ Ошибка разбора chatId:', error);
+            return [];
+        }
+    }
+
     async updateChatTimestamp(chatId, lastMessage = null) {
         try {
             const pool = require('../config/database');
@@ -436,47 +455,65 @@ class ChatSocket {
         }
     }
 
-    // 🔥 КРИТИЧЕСКИ ВАЖНЫЙ МЕТОД для messageController.js
     broadcastToChat(chatId, data, excludeUserId = null) {
-        if (!this.chatSubscriptions.has(chatId)) {
-            // Если нет подписчиков, отправляем участникам чата
-            const userIds = chatId.split('_');
-            userIds.forEach(userId => {
+        console.log(`🔥 Рассылка в чат ${chatId}, исключая: ${excludeUserId}`);
+        
+        // 1. Отправляем подписчикам
+        if (this.chatSubscriptions.has(chatId)) {
+            const subscribers = this.chatSubscriptions.get(chatId);
+            console.log(`🔥 Подписчики чата:`, Array.from(subscribers));
+            
+            subscribers.forEach(userId => {
                 if (userId !== excludeUserId) {
                     this.sendToUser(userId, data);
                 }
             });
-            return;
         }
         
-        const subscribers = this.chatSubscriptions.get(chatId);
+        // 2. Также отправляем участникам чата (на случай если не подписаны)
+        const participants = this.getChatParticipants(chatId);
+        console.log(`🔥 Участники чата:`, participants);
         
-        subscribers.forEach(userId => {
+        participants.forEach(userId => {
             if (userId !== excludeUserId) {
                 this.sendToUser(userId, data);
             }
         });
     }
     
-    // 🔥 ВТОРОЙ КРИТИЧЕСКИ ВАЖНЫЙ МЕТОД для messageController.js
     notifyChatListUpdate(chatId) {
         try {
-            const userIds = chatId.split('_');
+            // Используем правильный метод для получения участников
+            const participants = this.getChatParticipants(chatId);
             
-            userIds.forEach(userId => {
-                this.sendToUser(userId, {
-                    type: 'chat_updated',
-                    chatId,
-                    action: 'new_message',
-                    timestamp: Date.now()
-                });
+            console.log(`🔥 Уведомляем участников чата ${chatId}:`, participants);
+            
+            participants.forEach(userId => {
+                // Проверяем подключение пользователя
+                const userConnections = this.userConnections.get(userId);
+                
+                if (userConnections && userConnections.size > 0) {
+                    console.log(`✅ Пользователь ${userId} онлайн, отправляем уведомление`);
+                    
+                    userConnections.forEach(ws => {
+                        if (ws.readyState === WebSocket.OPEN) {
+                            ws.send(JSON.stringify({
+                                type: 'chat_updated',
+                                chatId,
+                                action: 'new_message',
+                                timestamp: Date.now()
+                            }));
+                        }
+                    });
+                } else {
+                    console.log(`⚠️ Пользователь ${userId} не онлайн, уведомление не отправлено`);
+                }
             });
         } catch (error) {
             console.error('❌ Ошибка уведомления об обновлении чата:', error);
         }
     }
     
-    // 🔥 ТРЕТИЙ КРИТИЧЕСКИ ВАЖНЫЙ МЕТОД для messageController.js
     notifyChatCreated(chatId, chatName, participants) {
         try {
             const message = {
@@ -499,17 +536,32 @@ class ChatSocket {
     
     sendToUser(userId, data) {
         try {
+            console.log(`🔥 Отправка пользователю ${userId}:`, data.type);
+            
             const userConnections = this.userConnections.get(userId);
             
-            if (userConnections) {
-                userConnections.forEach(ws => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify(data));
-                    }
-                });
+            if (!userConnections || userConnections.size === 0) {
+                console.log(`⚠️ Пользователь ${userId} не имеет активных WebSocket соединений`);
+                return false;
             }
+            
+            let sentCount = 0;
+            userConnections.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(data));
+                    sentCount++;
+                    console.log(`✅ Сообщение отправлено пользователю ${userId}`);
+                } else {
+                    console.log(`⚠️ WebSocket пользователя ${userId} не в состоянии OPEN: ${ws.readyState}`);
+                }
+            });
+            
+            console.log(`📊 Пользователю ${userId} отправлено ${sentCount} сообщений`);
+            return sentCount > 0;
+            
         } catch (error) {
             console.error(`❌ Ошибка отправки пользователю ${userId}:`, error);
+            return false;
         }
     }
 
