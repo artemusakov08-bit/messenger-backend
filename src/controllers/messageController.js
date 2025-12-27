@@ -6,6 +6,30 @@ const setChatSocket = (socketInstance) => {
     chatSocketInstance = socketInstance;
 };
 
+const getChatParticipants = (chatId) => {
+    try {
+        console.log(`🔍 Разбор chatId: ${chatId}`);
+        const parts = chatId.split('_');
+        console.log(`🔍 Части chatId:`, parts);
+        
+        if (parts.length < 4) {
+            console.error(`❌ Неверный формат chatId: ${chatId}`);
+            return [];
+        }
+        
+        // parts = ["user", "1766839332356", "user", "1766839575568"]
+        const user1 = parts[0] + '_' + parts[1];  // "user_1766839332356"
+        const user2 = parts[2] + '_' + parts[3];  // "user_1766839575568"
+        
+        console.log(`🔍 Участники чата: ${user1} и ${user2}`);
+        return [user1, user2];
+        
+    } catch (error) {
+        console.error(`❌ Ошибка разбора chatId:`, error);
+        return [];
+    }
+};
+
 const sendMessage = async (req, res) => {
     const connection = await pool.connect();
     
@@ -23,18 +47,20 @@ const sendMessage = async (req, res) => {
 
         console.log(`📤 Отправка сообщения: чат=${chatId}, от=${senderId}`);
 
-        // 1. СОЗДАЕМ ИЛИ ОБНОВЛЯЕМ ЧАТ
-        const chatCheck = await connection.query(
-            'SELECT id FROM chats WHERE id = $1',
-            [chatId]
-        );
+    const chatCheck = await connection.query(
+        'SELECT id FROM chats WHERE id = $1',
+        [chatId]
+    );
+
+    if (chatCheck.rows.length === 0) {
+        const participants = getChatParticipants(chatId);
         
-        if (chatCheck.rows.length === 0) {
-            // Получаем ID второго пользователя
-            const parts = chatId.split('_');
-            const otherUserId = parts.find(id => id !== senderId);
-            
-            let otherUserName = 'Приватный чат';
+        let otherUserName = 'Приватный чат';
+        let otherUserId = null;
+        
+        // Находим ID другого пользователя
+        if (participants.length === 2) {
+            otherUserId = participants.find(id => id !== senderId);
             
             if (otherUserId) {
                 const userResult = await connection.query(
@@ -46,27 +72,26 @@ const sendMessage = async (req, res) => {
                     ? userResult.rows[0].display_name 
                     : `User ${otherUserId.substring(otherUserId.length - 4)}`;
             }
-            
-            // СОЗДАЕМ ЧАТ
-            await connection.query(
-                `INSERT INTO chats (id, name, type, timestamp, last_message) 
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [chatId, otherUserName, 'private', Date.now(), text]
-            );
-            
-            console.log(`✅ Чат создан: ${chatId} (${otherUserName})`);
-            
-        } else {
-            // 🔥 КРИТИЧЕСКИ ВАЖНО: ОБНОВЛЯЕМ timestamp И last_message
-            await connection.query(
-                `UPDATE chats 
-                 SET timestamp = $1, last_message = $2 
-                 WHERE id = $3`,
-                [Date.now(), text, chatId]
-            );
-            
-            console.log(`🔄 Чат обновлен: ${chatId}`);
         }
+        
+        await connection.query(
+            `INSERT INTO chats (id, name, type, timestamp, last_message) 
+            VALUES ($1, $2, $3, $4, $5)`,
+            [chatId, otherUserName, 'private', Date.now(), text]
+        );
+        
+        console.log(`✅ Чат создан: ${chatId} (${otherUserName})`);
+        
+    } else {
+        await connection.query(
+            `UPDATE chats 
+            SET timestamp = $1, last_message = $2 
+            WHERE id = $3`,
+            [Date.now(), text, chatId]
+        );
+        
+        console.log(`🔄 Чат обновлен: ${chatId}`);
+    }
 
         // 2. СОХРАНЯЕМ СООБЩЕНИЕ
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
@@ -84,9 +109,9 @@ const sendMessage = async (req, res) => {
         
         console.log(`✅ Сообщение сохранено: ${messageId}`);
         
-        // 3. ОТПРАВЛЯЕМ ЧЕРЕЗ WEBSOCKET
         if (chatSocketInstance && chatSocketInstance.broadcastToChat) {
             console.log(`📤 Рассылка через WebSocket: ${chatId}`);
+            console.log(`👥 Участники чата:`, getChatParticipants(chatId));
             
             chatSocketInstance.broadcastToChat(chatId, {
                 type: 'new_message',
@@ -95,8 +120,8 @@ const sendMessage = async (req, res) => {
                 timestamp: Date.now()
             });
             
-            // 🔥 УВЕДОМЛЯЕМ ОБ ОБНОВЛЕНИИ СПИСКА ЧАТОВ
             if (chatSocketInstance.notifyChatListUpdate) {
+                console.log(`📢 Уведомление об обновлении чата: ${chatId}`);
                 chatSocketInstance.notifyChatListUpdate(chatId);
             }
         }
