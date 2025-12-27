@@ -120,54 +120,61 @@ class AuthController {
 
 async register(req, res) {
     const client = await db.getClient();
+    
     try {
+        await client.query('BEGIN'); // Начало транзакции
+        
         const { phone, displayName, username, role = 'user' } = req.body;
-        console.log('🆕 Регистрация:', { phone, displayName, username });
+        console.log('🆕 Регистрация (с транзакцией):', { phone, username });
 
-        if (!phone) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Телефон обязателен' 
-            });
-        }
-
-        // 1. Проверяем, нет ли пользователя с таким телефоном
-        const existingUser = await client.query(
-            'SELECT * FROM users WHERE phone = $1',
+        // 1. Проверка телефона
+        const phoneCheck = await client.query(
+            'SELECT phone FROM users WHERE phone = $1 FOR UPDATE',
             [phone]
         );
-
-        if (existingUser.rows.length > 0) {
+        
+        if (phoneCheck.rows.length > 0) {
+            await client.query('ROLLBACK');
             return res.status(400).json({ 
                 success: false,
                 error: 'Пользователь с таким телефоном уже существует' 
             });
         }
 
-        // 🔥 2. ПРОВЕРЯЕМ УНИКАЛЬНОСТЬ USERNAME
-        const generatedUsername = username || phone;
+        // 2. Проверка username (если указан)
+        const cleanUsername = username ? username.trim().toLowerCase() : null;
         
-        if (username) { // Если пользователь указал username, проверяем его
-            console.log(`🔍 Проверяем username: ${username}`);
-            
-            const existingUsername = await client.query(
-                'SELECT * FROM users WHERE username = $1',
-                [username]
-            );
-
-            if (existingUsername.rows.length > 0) {
+        if (cleanUsername) {
+            // Проверка формата
+            const usernameRegex = /^[a-zA-Z0-9_]+$/;
+            if (cleanUsername.length < 3 || !usernameRegex.test(cleanUsername)) {
+                await client.query('ROLLBACK');
                 return res.status(400).json({ 
                     success: false,
-                    error: 'Этот username уже занят' 
+                    error: 'Username должен быть минимум 3 символа и содержать только буквы, цифры и подчеркивание' 
+                });
+            }
+
+            // Проверка в БД с блокировкой
+            const usernameCheck = await client.query(
+                'SELECT username FROM users WHERE LOWER(username) = LOWER($1) FOR UPDATE',
+                [cleanUsername]
+            );
+            
+            if (usernameCheck.rows.length > 0) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ 
+                    success: false,
+                    error: `Username @${cleanUsername} уже занят` 
                 });
             }
         }
 
+        // 3. Создание пользователя
         const timestamp = Date.now();
         const userId = 'user_' + timestamp;
-        const generatedDisplayName = displayName || "User " + phone.slice(-4);
-        const userRole = role;
-        const authLevel = 'sms_only';
+        const finalUsername = cleanUsername || phone;
+        const finalDisplayName = displayName || "User " + phone.slice(-4);
 
         const result = await client.query(
             `INSERT INTO users (
@@ -178,25 +185,29 @@ async register(req, res) {
             [
                 userId, 
                 phone,
-                generatedUsername, // Используем username или phone
-                generatedDisplayName,
-                userRole,
+                finalUsername,
+                finalDisplayName,
+                role,
                 false,
                 false,
                 0,
-                authLevel,
+                'sms_only',
                 'offline',
                 Date.now()
             ]
         );
 
         const newUser = result.rows[0];
+        
+        // 4. Создание security записи
+        await UserSecurity.createOrUpdate(newUser.user_id);
+        
+        await client.query('COMMIT'); // Фиксация транзакции
+        
         console.log('✅ Пользователь зарегистрирован:', { 
-            userId: newUser.user_id, 
+            id: newUser.user_id, 
             username: newUser.username 
         });
-
-        await UserSecurity.createOrUpdate(newUser.user_id);
 
         const tempToken = jwt.sign(
             { 
@@ -224,19 +235,21 @@ async register(req, res) {
         });
 
     } catch (error) {
+        await client.query('ROLLBACK');
         console.error('❌ Ошибка регистрации:', error);
         
+        // Обработка ошибки UNIQUE constraint
         if (error.code === '23505') {
-            const constraint = error.constraint;
+            const constraint = error.constraint || '';
             
-            if (constraint && constraint.includes('username')) {
+            if (constraint.includes('username')) {
                 return res.status(400).json({ 
                     success: false,
-                    error: 'Этот username уже занят. Выберите другой.' 
+                    error: 'Этот username уже занят' 
                 });
             }
             
-            if (constraint && constraint.includes('phone')) {
+            if (constraint.includes('phone')) {
                 return res.status(400).json({ 
                     success: false,
                     error: 'Этот телефон уже зарегистрирован' 
@@ -246,7 +259,7 @@ async register(req, res) {
         
         res.status(500).json({ 
             success: false,
-            error: 'Ошибка сервера при регистрации: ' + error.message 
+            error: 'Ошибка сервера: ' + error.message 
         });
     } finally {
         client.release();

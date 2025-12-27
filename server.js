@@ -61,6 +61,8 @@ app.use('/api/security', securityRoutes);
 app.use('/api/security', require('./src/routes/security'));
 app.use('/api/call', callRoutes);
 app.use('/api/message', messageRoutes);
+const usernameRoutes = require('./src/routes/username');
+app.use('/api/username', usernameRoutes);
 
 const authMiddleware = require('./src/middleware/authMiddleware');
 
