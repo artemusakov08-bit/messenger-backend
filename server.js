@@ -195,7 +195,8 @@ async function initializeDatabase() {
           id TEXT PRIMARY KEY,
           name TEXT NOT NULL,
           type TEXT DEFAULT 'private',
-          timestamp BIGINT
+          timestamp BIGINT,
+          last_message TEXT
       )
     `);
     
