@@ -590,118 +590,130 @@ io.on('connection', (socket) => {
     socket.broadcast.emit('user_online', userId);
   });
 
-// Отправка сообщения через WebSocket
-socket.on('send_message', async (messageData) => {
-  try {
-    console.log('🔥 === НОВОЕ СООБЩЕНИЕ ===');
-    console.log('🔥 Данные:', JSON.stringify(messageData, null, 2));
-    
-    const chatId = messageData.chat_id || messageData.chatId || '';
-    const text = messageData.text || '';
-    const senderId = messageData.sender_id || messageData.senderId || '';
-    const senderName = messageData.sender_name || messageData.senderName || 'Вы';
-    const type = messageData.type || 'text';
-
-    console.log('🔥 Парсинг:', { chatId, text, senderId, senderName, type });
-
-    if (!chatId || !text || !senderId) {
-      console.error('❌ Недостаточно данных');
-      socket.emit('message_error', { error: 'Missing required fields' });
-      return;
-    }
-
-    const messageId = 'msg_' + Date.now();
-    const timestamp = Date.now();
-    
+  // Отправка сообщения через WebSocket
+  socket.on('send_message', async (messageData) => {
     try {
-      const result = await pool.query(
+      console.log('🔥 === НОВОЕ СООБЩЕНИЕ ===');
+      
+      const chatId = messageData.chat_id || messageData.chatId || '';
+      const text = messageData.text || '';
+      const senderId = messageData.sender_id || messageData.senderId || '';
+      const senderName = messageData.sender_name || messageData.senderName || 'Вы';
+      const type = messageData.type || 'text';
+      
+      console.log('🔥 Парсинг:', { chatId, text, senderId });
+
+      if (!chatId || !text || !senderId) {
+        socket.emit('message_error', { error: 'Missing required fields' });
+        return;
+      }
+
+      // 🔥 ПРАВИЛЬНЫЙ РАЗБОР CHAT_ID
+      const parts = chatId.split('_');
+      
+      if (parts.length < 4) {
+        console.error('❌ Неверный chatId:', chatId);
+        socket.emit('message_error', { error: 'Invalid chat ID' });
+        return;
+      }
+      
+      // Правильно получаем ID пользователей
+      const user1 = parts[0] + '_' + parts[1];  // "user_1766839332356"
+      const user2 = parts[2] + '_' + parts[3];  // "user_1766839575568"
+      
+      console.log('👥 Участники:', user1, user2);
+
+      const messageId = 'msg_' + Date.now();
+      const timestamp = Date.now();
+      
+      // 🔥 СОХРАНЯЕМ В БД
+      await pool.query(
         `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, type, timestamp) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [messageId, chatId, text, senderId, senderName, type, timestamp]
       );
-      console.log('✅ Сообщение сохранено в БД:', messageId);
-    } catch (dbError) {
-      console.error('❌ Ошибка сохранения в БД:', dbError.message);
-    }
+      console.log('✅ Сообщение сохранено:', messageId);
 
-    try {
-      await pool.query(
-        'UPDATE chats SET timestamp = $1 WHERE id = $2',
-        [timestamp, chatId]
+      // 🔥 СОЗДАЕМ/ОБНОВЛЯЕМ ЧАТ
+      const chatCheck = await pool.query(
+        'SELECT id FROM chats WHERE id = $1',
+        [chatId]
       );
-      console.log('✅ Время чата обновлено:', chatId);
-    } catch (updateError) {
-      console.error('❌ Ошибка обновления чата:', updateError.message);
-    }
-
-    const messageToSend = {
-      id: messageId,
-      chat_id: chatId,
-      text: text,
-      sender_id: senderId,
-      sender_name: senderName,
-      type: type,
-      timestamp: timestamp,
-      status: 'DELIVERED'
-    };
-    
-    console.log('🔥 Сообщение для отправки:', JSON.stringify(messageToSend, null, 2));
-    
-    io.to(chatId).emit('new_message', messageToSend);
-    console.log(`📤 Отправлено в комнату ${chatId} всем участникам`);
-    
-    if (chatId.includes('_')) {
-      const parts = chatId.split('_');
-      if (parts.length >= 2) {
-        const user1 = parts[0];
-        const user2 = parts[1];
+      
+      if (chatCheck.rows.length === 0) {
+        const otherUserId = senderId === user1 ? user2 : user1;
+        let chatName = 'Приватный чат';
         
-        // 🔥 ОПРЕДЕЛЯЕМ ПОЛУЧАТЕЛЯ
-        const receiverId = senderId === user1 ? user2 : user1;
+        const userResult = await pool.query(
+          'SELECT display_name FROM users WHERE user_id = $1',
+          [otherUserId]
+        );
         
-        // 🔥 НАХОДИМ SOCKET ПОЛУЧАТЕЛЯ И ОТПРАВЛЯЕМ НАПРЯМУЮ
-        const receiverSocketId = connectedUsers.get(receiverId);
-        if (receiverSocketId) {
-          io.to(receiverSocketId).emit('new_message', messageToSend);
-          console.log(`✅ Отправлено напрямую пользователю ${receiverId} (socket: ${receiverSocketId})`);
-        } else {
-          console.log(`⚠️ Пользователь ${receiverId} не онлайн`);
-          
-          try {
-            await pool.query(
-              `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                'notif_' + Date.now(),
-                receiverId,
-                'new_message',
-                'Новое сообщение',
-                `${senderName}: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`,
-                JSON.stringify({ chatId, messageId }),
-                timestamp
-              ]
-            );
-            console.log(`💾 Уведомление сохранено для ${receiverId}`);
-          } catch (notifError) {
-            console.error('❌ Ошибка сохранения уведомления:', notifError.message);
-          }
+        if (userResult.rows.length > 0) {
+          chatName = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
         }
+        
+        await pool.query(
+          `INSERT INTO chats (id, name, type, timestamp, last_message) 
+          VALUES ($1, $2, $3, $4, $5)`,
+          [chatId, chatName, 'private', timestamp, text]
+        );
+        console.log('✅ Чат создан:', chatId);
+      } else {
+        await pool.query(
+          'UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3',
+          [timestamp, text, chatId]
+        );
+        console.log('✅ Чат обновлен:', chatId);
       }
-    }
-    
-    socket.emit('message_sent', {
-      messageId: messageId,
-      chatId: chatId,
-      status: 'SENT',
-      isMine: true
-    });
-    console.log(`📩 Отправлено подтверждение отправителю ${senderId}`);
 
-  } catch (error) {
-    console.error('❌ Ошибка обработки сообщения:', error);
-    socket.emit('message_error', { error: error.message });
-  } 
-});
+      const messageToSend = {
+        id: messageId,
+        chat_id: chatId,
+        text: text,
+        sender_id: senderId,
+        sender_name: senderName,
+        type: type,
+        timestamp: timestamp,
+        status: 'DELIVERED'
+      };
+      
+      // 🔥 ОТПРАВЛЯЕМ СООБЩЕНИЕ
+      // 1. В комнату чата
+      io.to(chatId).emit('new_message', messageToSend);
+      
+      // 2. Находим получателя и отправляем напрямую
+      const receiverId = senderId === user1 ? user2 : user1;
+      const receiverSocketId = connectedUsers.get(receiverId);
+      
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('new_message', messageToSend);
+        console.log(`✅ Отправлено ${receiverId}`);
+      } else {
+        console.log(`⚠️ ${receiverId} оффлайн`);
+        
+        // Сохраняем уведомление
+        await pool.query(
+          `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          ['notif_' + Date.now(), receiverId, 'new_message', 
+          'Новое сообщение', `${senderName}: ${text}`, 
+          JSON.stringify({ chatId, messageId }), timestamp]
+        );
+      }
+      
+      // 3. Подтверждение отправителю
+      socket.emit('message_sent', {
+        messageId: messageId,
+        chatId: chatId,
+        status: 'SENT'
+      });
+
+    } catch (error) {
+      console.error('❌ Ошибка:', error);
+      socket.emit('message_error', { error: error.message });
+    } 
+  });
 
   socket.on('join_chat', (chatId) => {
     socket.join(chatId);
