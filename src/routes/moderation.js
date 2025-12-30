@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const moderationController = require('../controllers/moderationController');
 const authMiddleware = require('../middleware/authMiddleware');
+const pool = require('../config/database'); // ДОБАВЬТЕ ЭТУ СТРОКУ!
 
 // 🔥 Проверка ролей модератора
 const requireModerator = (req, res, next) => {
@@ -148,4 +149,4 @@ router.get('/health',
   }
 );
 
-module.exports = router;
+module.exports = router; 
