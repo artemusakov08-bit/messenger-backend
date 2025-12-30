@@ -1,8 +1,8 @@
+server.js
 require('dotenv').config({ path: '.env' });
 
 console.log('🚀 ===== ЗАПУСК СЕРВЕРА =====');
 console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
-console.log('📡 PORT:', process.env.PORT || 10000);
 
 const express = require('express');
 const { Pool } = require('pg');
@@ -10,172 +10,152 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
 const http = require('http');
-const jwt = require('jsonwebtoken');
-
-// Импорт контроллеров и роутов
 const authController = require('./src/controllers/authController');
+
+// 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
+const db = require('./src/config/database');
 const chatRoutes = require('./src/routes/chat');
 const callRoutes = require('./src/routes/call');
 const messageRoutes = require('./src/routes/message');
-const securityRoutes = require('./src/routes/security');
-const usernameRoutes = require('./src/routes/username');
-const moderationRoutes = require('./src/routes/moderation');
-const reportRoutes = require('./src/routes/reports');
-const templateRoutes = require('./src/routes/templates');
-const dashboardRoutes = require('./src/routes/dashboard');
-
-const authMiddleware = require('./src/middleware/authMiddleware');
 
 const app = express();
 const server = http.createServer(app);
-
-// Socket.io конфигурация
 const io = new Server(server, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling'],
-  pingTimeout: 60000,
-  pingInterval: 25000
+    methods: ["GET", "POST"]
+  }
 });
 
 const port = process.env.PORT || 10000;
 
-// Глобальные переменные для хранения подключений
-const connectedUsers = new Map(); // userId -> socket.id
-const userSockets = new Map(); // userId -> Set(socket.id)
-const chatRooms = new Map(); // chatId -> Set(userId)
+// 🔥 ЗАГРУЗКА .env ФАЙЛА
+require('dotenv').config();
 
-// Middleware
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-  credentials: true
-}));
-
-app.use(bodyParser.json({ limit: '10mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
-
-// Логирование запросов
-app.use((req, res, next) => {
-  const timestamp = new Date().toISOString();
-  console.log(`📨 [${timestamp}] ${req.method} ${req.originalUrl}`);
-  next();
+// Глобальный обработчик ошибок
+process.on('uncaughtException', (error) => {
+  console.error('❌ НЕПОЙМАННАЯ ОШИБКА:', error);
 });
 
-// Функция для безопасного разбора chatId
-function extractParticipantIds(chatId) {
-  try {
-    console.log(`🔍 Извлечение участников из chatId: ${chatId}`);
-    
-    if (!chatId || typeof chatId !== 'string') {
-      console.error('❌ Неверный формат chatId:', chatId);
-      return [];
-    }
-    
-    // Удаляем префикс "user_" если есть
-    const cleanChatId = chatId.replace(/user_/g, '');
-    
-    // Разделяем по "_"
-    const parts = cleanChatId.split('_');
-    
-    if (parts.length < 2) {
-      console.error(`❌ Неверный формат chatId: ${chatId}, parts: ${parts}`);
-      return [];
-    }
-    
-    // Берем первые два числа как ID участников
-    const participant1 = parts[0].trim();
-    const participant2 = parts[1].trim();
-    
-    if (!participant1 || !participant2) {
-      console.error(`❌ Пустые ID участников в chatId: ${chatId}`);
-      return [];
-    }
-    
-    console.log(`🔍 Участники: ${participant1}, ${participant2}`);
-    return [participant1, participant2];
-    
-  } catch (error) {
-    console.error(`❌ Ошибка разбора chatId ${chatId}:`, error);
-    return [];
-  }
-}
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ НЕОБРАБОТАННЫЙ PROMISE:', reason);
+});
 
-// Функция для создания chatId
-function createChatId(userId1, userId2) {
-  // Убеждаемся, что это только числовые ID
-  const id1 = String(userId1).replace(/\D/g, '');
-  const id2 = String(userId2).replace(/\D/g, '');
-  
-  // Сортируем ID для единообразия
-  const sortedIds = [id1, id2].sort((a, b) => a.localeCompare(b));
-  
-  // Формируем chatId: user_123456_user_789012
-  const chatId = `user_${sortedIds[0]}_user_${sortedIds[1]}`;
-  console.log(`🔧 Создан chatId: ${chatId} для пользователей ${id1} и ${id2}`);
-  return chatId;
-}
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
+
+// Логирование всех запросов
+app.use((req, res, next) => {
+    console.log(`📨 ${new Date().toISOString()} - ${req.method} ${req.originalUrl}`);
+    console.log('🔍 Raw URL:', req.url);
+    console.log('🔍 Query string:', req.query);
+    console.log('📦 Body:', req.body);
+    next();
+});
+
+// 🔥 ПОДКЛЮЧАЕМ РОУТЫ
+app.use('/api/auth', authRoutes);
+const securityRoutes = require('./src/routes/security');
+app.use('/api/security', securityRoutes);
+app.use('/api/security', require('./src/routes/security'));
+app.use('/api/call', callRoutes);
+app.use('/api/message', messageRoutes);
+const usernameRoutes = require('./src/routes/username');
+app.use('/api/username', usernameRoutes);
+
+const authMiddleware = require('./src/middleware/authMiddleware');
+
+// 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
+app.use('/api/chat', authMiddleware.authenticate, chatRoutes);  
+app.use('/api/call', authMiddleware.authenticate, callRoutes);
+app.use('/api/message', authMiddleware.authenticate, messageRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
-
-pool.on('connect', () => {
-  console.log('✅ Database connected successfully');
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 pool.on('error', (err) => {
   console.error('❌ Database connection error:', err);
 });
 
-// Инициализация базы данных
+pool.on('connect', () => {
+  console.log('✅ Database connected successfully');
+});
+
+// Функция инициализации базы
 async function initializeDatabase() {
-  const client = await pool.connect();
-  
   try {
-    console.log('🔄 Инициализация базы данных...');
+    console.log('🔄 Initializing database...');
     
-    // Таблица пользователей
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        username TEXT UNIQUE,
-        display_name TEXT NOT NULL,
-        phone TEXT UNIQUE,
-        password TEXT,
-        status TEXT DEFAULT 'offline',
-        last_seen BIGINT,
-        role VARCHAR(20) DEFAULT 'user',
-        is_premium BOOLEAN DEFAULT false,
-        is_banned BOOLEAN DEFAULT false,
-        ban_expires BIGINT,
-        warnings INTEGER DEFAULT 0,
-        auth_level VARCHAR(50) DEFAULT 'sms_only',
-        bio TEXT,
-        profile_image TEXT,
-        custom_status VARCHAR(255) DEFAULT 'В сети',
-        message_notifications BOOLEAN DEFAULT true,
-        call_notifications BOOLEAN DEFAULT true,
-        notification_sound BOOLEAN DEFAULT true,
-        online_status BOOLEAN DEFAULT true,
-        read_receipts BOOLEAN DEFAULT true,
-        settings_updated_at TIMESTAMP,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        updated_at BIGINT
-      )
+    // Подключаемся к базе
+    await db.connect();
+    
+    // 🔥 СОЗДАНИЕ ТАБЛИЦЫ ПОЛЬЗОВАТЕЛЕЙ 
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            username TEXT UNIQUE,
+            display_name TEXT NOT NULL,
+            phone TEXT UNIQUE,
+            password TEXT,
+            status TEXT DEFAULT 'offline',
+            last_seen BIGINT,
+            role VARCHAR(20) DEFAULT 'user',
+            is_premium BOOLEAN DEFAULT false,
+            is_banned BOOLEAN DEFAULT false,
+            ban_expires BIGINT,
+            warnings INTEGER DEFAULT 0,
+            auth_level VARCHAR(50) DEFAULT 'sms_only',
+            
+            -- ДОБАВЛЕННЫЕ КОЛОНКИ ДЛЯ ПРОФИЛЯ:
+            bio TEXT,
+            profile_image TEXT,
+            custom_status VARCHAR(255) DEFAULT 'В сети',
+            
+            -- ДОБАВЛЕННЫЕ КОЛОНКИ ДЛЯ НАСТРОЕК:
+            message_notifications BOOLEAN DEFAULT true,
+            call_notifications BOOLEAN DEFAULT true,
+            notification_sound BOOLEAN DEFAULT true,
+            online_status BOOLEAN DEFAULT true,
+            read_receipts BOOLEAN DEFAULT true,
+            settings_updated_at TIMESTAMP,
+            
+            -- ТАЙМСТАМПЫ:
+            created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
+            updated_at BIGINT
+        )
     `);
     
-    // Таблица безопасности
-    await client.query(`
+  const alterColumns = [
+      'bio TEXT',
+      'profile_image TEXT',
+      'custom_status VARCHAR(255) DEFAULT \'В сети\'',
+      'message_notifications BOOLEAN DEFAULT true',
+      'call_notifications BOOLEAN DEFAULT true',
+      'notification_sound BOOLEAN DEFAULT true',
+      'online_status BOOLEAN DEFAULT true',
+      'read_receipts BOOLEAN DEFAULT true',
+      'settings_updated_at TIMESTAMP',
+      'created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000',
+      'updated_at BIGINT'
+  ];
+
+  for (const column of alterColumns) {
+      try {
+          await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${column}`);
+          console.log(`✅ Добавлена колонка: ${column.split(' ')[0]}`);
+      } catch (error) {
+          console.log(`⚠️  Колонка уже существует: ${column.split(' ')[0]}`);
+      }
+  }
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS user_security (
         id VARCHAR(50) PRIMARY KEY,
         user_id VARCHAR(50) UNIQUE NOT NULL,
@@ -196,9 +176,8 @@ async function initializeDatabase() {
         trusted_devices JSONB DEFAULT '[]'
       )
     `);
-    
-    // Таблица кодов верификации
-    await client.query(`
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS verification_codes (
         id VARCHAR(50) PRIMARY KEY,
         phone VARCHAR(20) NOT NULL,
@@ -212,22 +191,17 @@ async function initializeDatabase() {
       )
     `);
     
-    // Таблица чатов
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS chats (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        type TEXT DEFAULT 'private',
-        timestamp BIGINT,
-        last_message TEXT,
-        last_message_time BIGINT,
-        unread_count INTEGER DEFAULT 0,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          type TEXT DEFAULT 'private',
+          timestamp BIGINT,
+          last_message TEXT
       )
     `);
     
-    // Таблица сообщений
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
@@ -235,41 +209,30 @@ async function initializeDatabase() {
         sender_id TEXT NOT NULL,
         sender_name TEXT NOT NULL,
         timestamp BIGINT,
-        type TEXT DEFAULT 'text',
-        read BOOLEAN DEFAULT false,
-        read_by JSONB DEFAULT '[]',
-        delivered_to JSONB DEFAULT '[]',
-        status VARCHAR(20) DEFAULT 'sent'
+        type TEXT DEFAULT 'text'
       )
     `);
     
-    // Таблица групп
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         description TEXT,
         created_by TEXT NOT NULL,
-        created_at BIGINT,
-        avatar_url TEXT,
-        is_public BOOLEAN DEFAULT false,
-        member_count INTEGER DEFAULT 1
+        created_at BIGINT
       )
     `);
     
-    // Таблица участников групп
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS group_members (
         group_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         role TEXT DEFAULT 'member',
-        joined_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
         PRIMARY KEY (group_id, user_id)
       )
     `);
-    
-    // Таблица звонков
-    await client.query(`
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS calls (
         id TEXT PRIMARY KEY,
         from_user_id TEXT NOT NULL,
@@ -277,14 +240,14 @@ async function initializeDatabase() {
         call_type TEXT DEFAULT 'voice',
         status TEXT DEFAULT 'initiated',
         duration INTEGER DEFAULT 0,
-        created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        ended_at BIGINT,
-        peer_id TEXT
+        created_at TIMESTAMP DEFAULT NOW(),
+        ended_at TIMESTAMP,
+        FOREIGN KEY (from_user_id) REFERENCES users(user_id),
+        FOREIGN KEY (to_user_id) REFERENCES users(user_id)
       )
     `);
-    
-    // Таблица уведомлений
-    await client.query(`
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS notifications (
         id VARCHAR(50) PRIMARY KEY,
         user_id VARCHAR(50) NOT NULL,
@@ -296,9 +259,10 @@ async function initializeDatabase() {
         created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
       )
     `);
+
+    console.log('🔄 Creating moderation tables...');
     
-    // Таблица жалоб
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS reports (
         id VARCHAR(50) PRIMARY KEY,
         reporter_id VARCHAR(50),
@@ -316,8 +280,7 @@ async function initializeDatabase() {
       )
     `);
     
-    // Таблица действий модерации
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS moderation_actions (
         id VARCHAR(50) PRIMARY KEY,
         moderator_id VARCHAR(50),
@@ -329,8 +292,7 @@ async function initializeDatabase() {
       )
     `);
     
-    // Таблица шаблонных ответов
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS template_responses (
         id VARCHAR(50) PRIMARY KEY,
         title VARCHAR(255) NOT NULL,
@@ -341,8 +303,7 @@ async function initializeDatabase() {
       )
     `);
     
-    // Таблица аудит логов
-    await client.query(`
+    await db.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(50) PRIMARY KEY,
         user_id VARCHAR(50),
@@ -356,235 +317,359 @@ async function initializeDatabase() {
       )
     `);
     
-    // Создание индексов
-    await client.query('CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_chats_timestamp ON chats(timestamp DESC)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)');
-    await client.query('CREATE INDEX IF NOT EXISTS idx_reports_priority ON reports(priority DESC)');
-    
-    console.log('✅ Все таблицы базы данных созданы/проверены');
+    await db.query('CREATE INDEX IF NOT EXISTS idx_verification_codes_phone_expires ON verification_codes(phone, expires_at)');
+    await db.query('CREATE INDEX IF NOT EXISTS idx_user_security_user_id ON user_security(user_id)');
+
+    console.log('✅ All database tables created/verified');
     
   } catch (error) {
-    console.error('❌ Ошибка инициализации базы данных:', error);
-    throw error;
-  } finally {
-    client.release();
+    console.error('❌ Database initialization error:', error);
+    console.log('⚠️  Application will continue with limited functionality');
   }
 }
 
-// Socket.io обработка подключений
+// Хранилище подключенных пользователей
+const connectedUsers = new Map();
+
+// WebSocket соединения
 io.on('connection', (socket) => {
-  console.log(`🔗 Новое Socket.io подключение: ${socket.id}`);
+  console.log('🔗 Пользователь подключился:', socket.id);
+
+  // Модератор присоединяется к очереди
+  socket.on('join_moderation_queue', (userData) => {
+      const { userId, role } = userData;
+      
+      if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+          socket.join('moderation_queue');
+          console.log(`👮 Модератор ${userId} присоединился к очереди`);
+          
+          socket.emit('queue_joined', {
+              message: 'Joined moderation queue',
+              queue: 'moderation'
+          });
+          
+          // Отправляем текущую статистику
+          pool.query(`
+              SELECT COUNT(*) as pending_count 
+              FROM reports 
+              WHERE status = 'pending'
+          `).then(result => {
+              socket.emit('queue_stats', {
+                  pendingReports: parseInt(result.rows[0].pending_count)
+              });
+          }).catch(err => {
+              console.error('❌ Error getting queue stats:', err);
+          });
+      }
+  });
+    
+  // Модератор покидает очередь
+  socket.on('leave_moderation_queue', (userId) => {
+      socket.leave('moderation_queue');
+      console.log(`👮 Модератор ${userId} покинул очередь`);
+  });
   
-  let userId = null;
-  let userData = null;
-  
-  // Аутентификация через токен
-  socket.on('authenticate', async (token) => {
+  // Подписка на уведомления о новых жалобах
+  socket.on('subscribe_reports', (userData) => {
+      const { userId, role } = userData;
+      
+      if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
+          socket.join('report_notifications');
+          console.log(`🔔 Пользователь ${userId} подписался на уведомления о жалобах`);
+      }
+  });
+
+  // 📞 Обработчики звонков
+  socket.on('start_call', async (callData) => {
     try {
-      if (!token) {
-        socket.emit('auth_error', { message: 'Токен отсутствует' });
+      const { fromUserId, toUserId, callType = 'voice' } = callData;
+      
+      console.log('📞 Starting call via WebSocket:', { fromUserId, toUserId, callType });
+
+      // Проверяем существование пользователей
+      const fromUser = await pool.query(
+        'SELECT * FROM users WHERE user_id = $1',
+        [fromUserId]
+      );
+      
+      const toUser = await pool.query(
+        'SELECT * FROM users WHERE user_id = $1',
+        [toUserId]
+      );
+
+      if (fromUser.rows.length === 0 || toUser.rows.length === 0) {
+        socket.emit('call_error', { error: 'Пользователь не найден' });
         return;
       }
+
+      const callId = 'call_' + Date.now();
       
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      userId = decoded.userId;
-      
-      if (!userId) {
-        socket.emit('auth_error', { message: 'Неверный токен' });
-        return;
-      }
-      
-      // Получаем данные пользователя
+      // Сохраняем звонок в базу
       const result = await pool.query(
-        'SELECT user_id, username, display_name, role, status FROM users WHERE user_id = $1',
-        [userId]
+        `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, created_at) 
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [callId, fromUserId, toUserId, callType, 'ringing', new Date()]
       );
+
+      const call = result.rows[0];
       
-      if (result.rows.length === 0) {
-        socket.emit('auth_error', { message: 'Пользователь не найден' });
-        return;
+      // Отправляем уведомление целевому пользователю
+      const targetSocketId = connectedUsers.get(toUserId);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit('incoming_call', {
+          callId: call.id,
+          fromUserId: call.from_user_id,
+          fromUserName: fromUser.rows[0].display_name,
+          callType: call.call_type
+        });
       }
-      
-      userData = result.rows[0];
-      socket.userId = userId;
-      socket.userData = userData;
-      
-      // Сохраняем подключение
-      if (!userSockets.has(userId)) {
-        userSockets.set(userId, new Set());
-      }
-      userSockets.get(userId).add(socket.id);
-      connectedUsers.set(socket.id, userId);
-      
-      // Обновляем статус пользователя
-      await pool.query(
-        'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-        ['online', Date.now(), userId]
-      );
-      
-      // Уведомляем о подключении
-      socket.emit('authenticated', {
-        userId,
-        username: userData.username,
-        displayName: userData.display_name,
-        timestamp: Date.now()
+
+      // Отправляем подтверждение инициатору
+      socket.emit('call_started', {
+        callId: call.id,
+        status: 'ringing'
       });
-      
-      // Уведомляем других пользователей
-      socket.broadcast.emit('user_online', {
-        userId,
-        username: userData.username
-      });
-      
-      console.log(`✅ Пользователь аутентифицирован: ${userId} (${userData.display_name})`);
-      
-      // Загружаем и подписываем на чаты пользователя
-      await loadAndSubscribeToChats(userId, socket);
-      
+
+      console.log('✅ Call initiated:', callId);
+
     } catch (error) {
-      console.error('❌ Ошибка аутентификации:', error.message);
-      socket.emit('auth_error', { message: 'Ошибка аутентификации' });
+      console.error('❌ WebSocket call error:', error);
+      socket.emit('call_error', { error: 'Ошибка начала звонка' });
     }
   });
-  
-  // Подключение к чату
-  socket.on('join_chat', async (chatId) => {
+
+  // 📞 Принять звонок
+  socket.on('accept_call', async (callData) => {
     try {
-      if (!userId || !chatId) {
+      const { callId } = callData;
+      
+      console.log('✅ Accepting call:', callId);
+
+      // Обновляем статус звонка
+      const result = await pool.query(
+        `UPDATE calls SET status = 'active' WHERE id = $1 RETURNING *`,
+        [callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
         return;
       }
+
+      const call = result.rows[0];
       
-      console.log(`👥 Пользователь ${userId} присоединяется к чату: ${chatId}`);
+      // Уведомляем обоих пользователей
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      const toSocketId = connectedUsers.get(call.to_user_id);
       
-      // Проверяем доступ к чату
-      const participants = extractParticipantIds(chatId);
-      if (!participants.includes(userId)) {
-        socket.emit('chat_error', { chatId, error: 'Нет доступа к чату' });
-        return;
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_accepted', { callId: call.id });
       }
-      
-      socket.join(chatId);
-      
-      // Добавляем в комнаты чата
-      if (!chatRooms.has(chatId)) {
-        chatRooms.set(chatId, new Set());
+      if (toSocketId) {
+        io.to(toSocketId).emit('call_accepted', { callId: call.id });
       }
-      chatRooms.get(chatId).add(userId);
-      
-      socket.emit('chat_joined', {
-        chatId,
-        timestamp: Date.now()
-      });
-      
-      console.log(`✅ Пользователь ${userId} присоединился к чату ${chatId}`);
-      
+
+      console.log('✅ Call accepted:', callId);
+
     } catch (error) {
-      console.error('❌ Ошибка присоединения к чату:', error);
+      console.error('❌ Accept call error:', error);
+      socket.emit('call_error', { error: 'Ошибка принятия звонка' });
     }
   });
-  
-  // Покинуть чат
-  socket.on('leave_chat', (chatId) => {
-    if (!userId || !chatId) return;
-    
-    socket.leave(chatId);
-    
-    if (chatRooms.has(chatId)) {
-      chatRooms.get(chatId).delete(userId);
-      if (chatRooms.get(chatId).size === 0) {
-        chatRooms.delete(chatId);
+
+  // 📞 Отклонить звонок
+  socket.on('reject_call', async (callData) => {
+    try {
+      const { callId } = callData;
+      
+      console.log('❌ Rejecting call:', callId);
+
+      // Обновляем статус звонка
+      const result = await pool.query(
+        `UPDATE calls SET status = 'rejected' WHERE id = $1 RETURNING *`,
+        [callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
+        return;
       }
+
+      const call = result.rows[0];
+      
+      // Уведомляем инициатора
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_rejected', { callId: call.id });
+      }
+
+      console.log('✅ Call rejected:', callId);
+
+    } catch (error) {
+      console.error('❌ Reject call error:', error);
+      socket.emit('call_error', { error: 'Ошибка отклонения звонка' });
     }
-    
-    console.log(`👥 Пользователь ${userId} покинул чат ${chatId}`);
   });
-  
-  // Отправка сообщения (WebSocket)
+
+  // 📞 Завершить звонок
+  socket.on('end_call', async (callData) => {
+    try {
+      const { callId, duration = 0 } = callData;
+      
+      console.log('📞 Ending call:', { callId, duration });
+
+      const result = await pool.query(
+        `UPDATE calls 
+        SET status = 'ended', duration = $1, ended_at = $2 
+        WHERE id = $3 RETURNING *`,
+        [duration, new Date(), callId]
+      );
+
+      if (result.rows.length === 0) {
+        socket.emit('call_error', { error: 'Звонок не найден' });
+        return;
+      }
+
+      const call = result.rows[0];
+      
+      // Уведомляем обоих пользователей
+      const fromSocketId = connectedUsers.get(call.from_user_id);
+      const toSocketId = connectedUsers.get(call.to_user_id);
+      
+      if (fromSocketId) {
+        io.to(fromSocketId).emit('call_ended', { callId: call.id, duration });
+      }
+      if (toSocketId) {
+        io.to(toSocketId).emit('call_ended', { callId: call.id, duration });
+      }
+
+      console.log('✅ Call ended:', callId);
+
+    } catch (error) {
+      console.error('❌ End call error:', error);
+      socket.emit('call_error', { error: 'Ошибка завершения звонка' });
+    }
+  });
+
+  // 🔄 WebRTC сигналинг для видео/аудио звонков
+  socket.on('webrtc_offer', (data) => {
+    const { targetUserId, offer, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_offer', { offer, callId, fromUserId: socket.userId });
+    }
+  });
+
+  socket.on('webrtc_answer', (data) => {
+    const { targetUserId, answer, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_answer', { answer, callId });
+    }
+  });
+
+  socket.on('webrtc_ice_candidate', (data) => {
+    const { targetUserId, candidate, callId } = data;
+    const targetSocketId = connectedUsers.get(targetUserId);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('webrtc_ice_candidate', { candidate, callId });
+    }
+  });
+
+  // Регистрация пользователя
+  socket.on('user_connected', (userId) => {
+    socket.userId = userId; 
+    connectedUsers.set(userId, socket.id);
+    console.log(`👤 Пользователь ${userId} подключен (socket: ${socket.id})`);
+    
+    // Обновляем статус в базе
+    pool.query(
+      'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+      ['online', Date.now(), userId]
+    ).catch(err => console.error('❌ Error updating user status:', err));
+    
+    // Уведомляем всех о новом онлайн пользователе
+    socket.broadcast.emit('user_online', userId);
+  });
+
+  // Отправка сообщения через WebSocket
   socket.on('send_message', async (messageData) => {
     try {
-      console.log('🔥 === ОТПРАВКА СООБЩЕНИЯ ЧЕРЕЗ WS ===');
+      console.log('🔥 === НОВОЕ СООБЩЕНИЕ ===');
       
-      const { chatId, text, senderId, senderName, type = 'text' } = messageData;
+      const chatId = messageData.chat_id || messageData.chatId || '';
+      const text = messageData.text || '';
+      const senderId = messageData.sender_id || messageData.senderId || '';
+      const senderName = messageData.sender_name || messageData.senderName || 'Вы';
+      const type = messageData.type || 'text';
       
-      if (!chatId || !text || !senderId || !senderName) {
-        socket.emit('message_error', { error: 'Отсутствуют обязательные поля' });
+      console.log('🔥 Парсинг:', { chatId, text, senderId });
+
+      if (!chatId || !text || !senderId) {
+        socket.emit('message_error', { error: 'Missing required fields' });
+        return;
+      }
+
+      // 🔥 ПРАВИЛЬНЫЙ РАЗБОР CHAT_ID
+      const parts = chatId.split('_');
+      
+      if (parts.length < 4) {
+        console.error('❌ Неверный chatId:', chatId);
+        socket.emit('message_error', { error: 'Invalid chat ID' });
         return;
       }
       
-      if (userId !== senderId) {
-        socket.emit('message_error', { error: 'Несоответствие ID отправителя' });
-        return;
-      }
+      // Правильно получаем ID пользователей
+      const user1 = parts[0] + '_' + parts[1];  // "user_1766839332356"
+      const user2 = parts[2] + '_' + parts[3];  // "user_1766839575568"
       
-      console.log(`📤 Отправка сообщения в ${chatId} от ${senderId}: ${text.substring(0, 50)}...`);
-      
-      // Проверяем участников чата
-      const participants = extractParticipantIds(chatId);
-      if (participants.length === 0) {
-        socket.emit('message_error', { error: 'Неверный формат chatId' });
-        return;
-      }
-      
-      if (!participants.includes(senderId)) {
-        socket.emit('message_error', { error: 'Отправитель не является участником чата' });
-        return;
-      }
-      
-      const receiverId = participants.find(id => id !== senderId);
-      if (!receiverId) {
-        socket.emit('message_error', { error: 'Не найден получатель' });
-        return;
-      }
-      
-      // Сохраняем сообщение в БД
-      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+      console.log('👥 Участники:', user1, user2);
+
+      const messageId = 'msg_' + Date.now();
       const timestamp = Date.now();
       
+      // 🔥 СОХРАНЯЕМ В БД
       await pool.query(
-        `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type, status) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [messageId, chatId, text, senderId, senderName, timestamp, type, 'delivered']
+        `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, type, timestamp) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [messageId, chatId, text, senderId, senderName, type, timestamp]
       );
-      
-      // Обновляем или создаем чат
+      console.log('✅ Сообщение сохранено:', messageId);
+
+      // 🔥 СОЗДАЕМ/ОБНОВЛЯЕМ ЧАТ
       const chatCheck = await pool.query(
-        'SELECT id, name FROM chats WHERE id = $1',
+        'SELECT id FROM chats WHERE id = $1',
         [chatId]
       );
       
       if (chatCheck.rows.length === 0) {
-        // Получаем имя получателя для названия чата
+        const otherUserId = senderId === user1 ? user2 : user1;
+        let chatName = 'Приватный чат';
+        
         const userResult = await pool.query(
           'SELECT display_name FROM users WHERE user_id = $1',
-          [receiverId]
+          [otherUserId]
         );
         
-        const chatName = userResult.rows.length > 0 
-          ? userResult.rows[0].display_name 
-          : `User ${receiverId.slice(-4)}`;
+        if (userResult.rows.length > 0) {
+          chatName = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
+        }
         
         await pool.query(
-          `INSERT INTO chats (id, name, type, timestamp, last_message, last_message_time) 
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [chatId, chatName, 'private', timestamp, text, timestamp]
+          `INSERT INTO chats (id, name, type, timestamp, last_message) 
+          VALUES ($1, $2, $3, $4, $5)`,
+          [chatId, chatName, 'private', timestamp, text]
         );
-        
-        console.log(`✅ Чат создан: ${chatId} (${chatName})`);
+        console.log('✅ Чат создан:', chatId);
       } else {
         await pool.query(
-          `UPDATE chats SET timestamp = $1, last_message = $2, last_message_time = $3 WHERE id = $4`,
-          [timestamp, text, timestamp, chatId]
+          'UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3',
+          [timestamp, text, chatId]
         );
-        
-        console.log(`🔄 Чат обновлен: ${chatId}`);
+        console.log('✅ Чат обновлен:', chatId);
       }
-      
-      // Формируем объект сообщения для отправки
-      const message = {
+
+      const messageToSend = {
         id: messageId,
         chat_id: chatId,
         text: text,
@@ -592,460 +677,1140 @@ io.on('connection', (socket) => {
         sender_name: senderName,
         type: type,
         timestamp: timestamp,
-        status: 'delivered'
+        status: 'DELIVERED'
       };
       
-      // 🔥 КРИТИЧЕСКИЙ МОМЕНТ: Отправляем сообщение
+      // 🔥 ОТПРАВЛЯЕМ СООБЩЕНИЕ
+      // 1. В комнату чата
+      io.to(chatId).emit('new_message', messageToSend);
       
-      // 1. Отправляем отправителю (подтверждение)
-      socket.emit('message_sent', {
-        messageId,
-        chatId,
-        status: 'sent',
-        timestamp
-      });
+      // 2. Находим получателя и отправляем напрямую
+      const receiverId = senderId === user1 ? user2 : user1;
+      const receiverSocketId = connectedUsers.get(receiverId);
       
-      // 2. Отправляем в комнату чата
-      socket.to(chatId).emit('new_message', message);
-      
-      // 3. Находим сокеты получателя и отправляем напрямую
-      const receiverSockets = userSockets.get(receiverId);
-      if (receiverSockets && receiverSockets.size > 0) {
-        receiverSockets.forEach(socketId => {
-          io.to(socketId).emit('new_message', message);
-        });
-        console.log(`✅ Сообщение отправлено получателю ${receiverId} через ${receiverSockets.size} соединений`);
+      if (receiverSocketId) {
+        io.to(receiverSocketId).emit('new_message', messageToSend);
+        console.log(`✅ Отправлено ${receiverId}`);
       } else {
-        console.log(`⚠️ Получатель ${receiverId} оффлайн, сообщение сохранено`);
+        console.log(`⚠️ ${receiverId} оффлайн`);
         
-        // Сохраняем уведомление для оффлайн пользователя
+        // Сохраняем уведомление
         await pool.query(
           `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [`notif_${Date.now()}`, receiverId, 'new_message', 
-           'Новое сообщение', `${senderName}: ${text.substring(0, 100)}`, 
-           JSON.stringify({ chatId, messageId, senderId }), timestamp]
+          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          ['notif_' + Date.now(), receiverId, 'new_message', 
+          'Новое сообщение', `${senderName}: ${text}`, 
+          JSON.stringify({ chatId, messageId }), timestamp]
         );
       }
       
-      // 4. Уведомляем об обновлении чата
-      participants.forEach(participantId => {
-        const participantSockets = userSockets.get(participantId);
-        if (participantSockets) {
-          participantSockets.forEach(socketId => {
-            io.to(socketId).emit('chat_updated', {
-              chatId,
-              lastMessage: text,
-              lastMessageTime: timestamp,
-              unreadCount: participantId === receiverId ? 1 : 0
-            });
-          });
-        }
+      // 3. Подтверждение отправителю
+      socket.emit('message_sent', {
+        messageId: messageId,
+        chatId: chatId,
+        status: 'SENT'
       });
-      
-      console.log(`✅ Сообщение ${messageId} успешно доставлено в чат ${chatId}`);
-      
+
     } catch (error) {
-      console.error('❌ Ошибка отправки сообщения через WS:', error);
+      console.error('❌ Ошибка:', error);
       socket.emit('message_error', { error: error.message });
-    }
+    } 
   });
-  
-  // Сообщение прочитано
-  socket.on('message_read', async (data) => {
-    try {
-      const { messageId, chatId, readerId } = data;
-      
-      if (!messageId || !chatId || !readerId) {
-        return;
-      }
-      
-      // Обновляем статус прочтения в БД
-      await pool.query(
-        `UPDATE messages 
-         SET read = true, 
-             read_by = COALESCE(read_by, '[]'::jsonb) || $1::jsonb
-         WHERE id = $2`,
-        [JSON.stringify([readerId]), messageId]
-      );
-      
-      // Получаем отправителя сообщения
-      const messageResult = await pool.query(
-        'SELECT sender_id FROM messages WHERE id = $1',
-        [messageId]
-      );
-      
-      if (messageResult.rows.length > 0) {
-        const senderId = messageResult.rows[0].sender_id;
+
+  socket.on('join_chat', (chatId) => {
+    socket.join(chatId);
+    console.log(`👥 Пользователь ${socket.userId} присоединился к чату ${chatId}`);
+  });
+
+  socket.on('leave_chat', (chatId) => {
+    socket.leave(chatId);
+    console.log(`👥 Пользователь ${socket.id} покинул чат ${chatId}`);
+  });
+
+  socket.on('disconnect', () => {
+    // Находим и удаляем пользователя из connectedUsers
+    for (let [userId, socketId] of connectedUsers.entries()) {
+      if (socketId === socket.id) {
+        connectedUsers.delete(userId);
+        console.log(`👤 Пользователь ${userId} отключился`);
         
-        // Уведомляем отправителя о прочтении
-        if (senderId !== readerId && userSockets.has(senderId)) {
-          userSockets.get(senderId).forEach(socketId => {
-            io.to(socketId).emit('message_read', {
-              messageId,
-              chatId,
-              readerId,
-              timestamp: Date.now()
-            });
-          });
-        }
-      }
-      
-    } catch (error) {
-      console.error('❌ Ошибка отметки сообщения как прочитанного:', error);
-    }
-  });
-  
-  // Набор текста
-  socket.on('typing', (data) => {
-    const { chatId, isTyping } = data;
-    
-    if (!chatId || !userId) return;
-    
-    // Отправляем всем в чате, кроме себя
-    socket.to(chatId).emit('user_typing', {
-      chatId,
-      userId,
-      isTyping,
-      timestamp: Date.now()
-    });
-  });
-  
-  // Звонки
-  socket.on('start_call', async (callData) => {
-    try {
-      const { toUserId, callType = 'voice', peerId } = callData;
-      
-      if (!toUserId || !userId) {
-        socket.emit('call_error', { error: 'Отсутствуют обязательные данные' });
-        return;
-      }
-      
-      console.log(`📞 Звонок от ${userId} к ${toUserId}`);
-      
-      const callId = `call_${Date.now()}`;
-      
-      // Сохраняем звонок в БД
-      await pool.query(
-        `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, peer_id, created_at) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [callId, userId, toUserId, callType, 'ringing', peerId, Date.now()]
-      );
-      
-      // Отправляем уведомление получателю
-      const receiverSockets = userSockets.get(toUserId);
-      if (receiverSockets && receiverSockets.size > 0) {
-        // Получаем данные отправителя
-        const senderResult = await pool.query(
-          'SELECT display_name, profile_image FROM users WHERE user_id = $1',
-          [userId]
-        );
+        // Обновляем статус в базе
+        pool.query(
+          'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+          ['offline', Date.now(), userId]
+        ).catch(err => console.error('❌ Error updating user status:', err));
         
-        const senderData = senderResult.rows[0] || { display_name: 'Пользователь' };
-        
-        receiverSockets.forEach(socketId => {
-          io.to(socketId).emit('incoming_call', {
-            callId,
-            fromUserId: userId,
-            fromUserName: senderData.display_name,
-            fromUserAvatar: senderData.profile_image,
-            callType,
-            peerId,
-            timestamp: Date.now()
-          });
-        });
-        
-        socket.emit('call_started', {
-          callId,
-          status: 'ringing'
-        });
-        
-        console.log(`✅ Уведомление о звонке отправлено ${toUserId}`);
-      } else {
-        socket.emit('call_error', { error: 'Пользователь оффлайн' });
+        // Уведомляем всех о offline пользователе
+        socket.broadcast.emit('user_offline', userId);
+        break;
       }
-      
-    } catch (error) {
-      console.error('❌ Ошибка начала звонка:', error);
-      socket.emit('call_error', { error: error.message });
     }
-  });
-  
-  socket.on('accept_call', async (callData) => {
-    try {
-      const { callId } = callData;
-      
-      console.log(`✅ Принятие звонка: ${callId}`);
-      
-      const callResult = await pool.query(
-        'SELECT from_user_id, to_user_id FROM calls WHERE id = $1',
-        [callId]
-      );
-      
-      if (callResult.rows.length === 0) {
-        socket.emit('call_error', { error: 'Звонок не найден' });
-        return;
-      }
-      
-      const call = callResult.rows[0];
-      
-      // Обновляем статус звонка
-      await pool.query(
-        'UPDATE calls SET status = $1 WHERE id = $2',
-        ['active', callId]
-      );
-      
-      // Уведомляем инициатора
-      const callerSockets = userSockets.get(call.from_user_id);
-      if (callerSockets) {
-        callerSockets.forEach(socketId => {
-          io.to(socketId).emit('call_accepted', {
-            callId,
-            timestamp: Date.now()
-          });
-        });
-      }
-      
-      console.log(`✅ Звонок ${callId} принят`);
-      
-    } catch (error) {
-      console.error('❌ Ошибка принятия звонка:', error);
-      socket.emit('call_error', { error: error.message });
-    }
-  });
-  
-  socket.on('reject_call', async (callData) => {
-    try {
-      const { callId } = callData;
-      
-      console.log(`❌ Отклонение звонка: ${callId}`);
-      
-      const callResult = await pool.query(
-        'SELECT from_user_id FROM calls WHERE id = $1',
-        [callId]
-      );
-      
-      if (callResult.rows.length === 0) return;
-      
-      const call = callResult.rows[0];
-      
-      // Обновляем статус звонка
-      await pool.query(
-        'UPDATE calls SET status = $1 WHERE id = $2',
-        ['rejected', callId]
-      );
-      
-      // Уведомляем инициатора
-      const callerSockets = userSockets.get(call.from_user_id);
-      if (callerSockets) {
-        callerSockets.forEach(socketId => {
-          io.to(socketId).emit('call_rejected', {
-            callId,
-            timestamp: Date.now()
-          });
-        });
-      }
-      
-    } catch (error) {
-      console.error('❌ Ошибка отклонения звонка:', error);
-    }
-  });
-  
-  socket.on('end_call', async (callData) => {
-    try {
-      const { callId, duration = 0 } = callData;
-      
-      console.log(`📞 Завершение звонка: ${callId}, длительность: ${duration}s`);
-      
-      const callResult = await pool.query(
-        'SELECT from_user_id, to_user_id FROM calls WHERE id = $1',
-        [callId]
-      );
-      
-      if (callResult.rows.length === 0) return;
-      
-      const call = callResult.rows[0];
-      
-      // Обновляем звонок
-      await pool.query(
-        'UPDATE calls SET status = $1, duration = $2, ended_at = $3 WHERE id = $4',
-        ['ended', duration, Date.now(), callId]
-      );
-      
-      // Уведомляем участников
-      const participants = [call.from_user_id, call.to_user_id];
-      participants.forEach(participantId => {
-        const participantSockets = userSockets.get(participantId);
-        if (participantSockets) {
-          participantSockets.forEach(socketId => {
-            io.to(socketId).emit('call_ended', {
-              callId,
-              duration,
-              timestamp: Date.now()
-            });
-          });
-        }
-      });
-      
-    } catch (error) {
-      console.error('❌ Ошибка завершения звонка:', error);
-    }
-  });
-  
-  // WebRTC сигналинг
-  socket.on('webrtc_offer', (data) => {
-    const { targetUserId, offer, callId } = data;
-    const targetSockets = userSockets.get(targetUserId);
-    
-    if (targetSockets) {
-      targetSockets.forEach(socketId => {
-        io.to(socketId).emit('webrtc_offer', {
-          offer,
-          callId,
-          fromUserId: userId
-        });
-      });
-    }
-  });
-  
-  socket.on('webrtc_answer', (data) => {
-    const { targetUserId, answer, callId } = data;
-    const targetSockets = userSockets.get(targetUserId);
-    
-    if (targetSockets) {
-      targetSockets.forEach(socketId => {
-        io.to(socketId).emit('webrtc_answer', {
-          answer,
-          callId
-        });
-      });
-    }
-  });
-  
-  socket.on('webrtc_ice_candidate', (data) => {
-    const { targetUserId, candidate, callId } = data;
-    const targetSockets = userSockets.get(targetUserId);
-    
-    if (targetSockets) {
-      targetSockets.forEach(socketId => {
-        io.to(socketId).emit('webrtc_ice_candidate', {
-          candidate,
-          callId
-        });
-      });
-    }
-  });
-  
-  // Модерация
-  socket.on('join_moderation_queue', (data) => {
-    const { userId: modUserId, role } = data;
-    
-    if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
-      socket.join('moderation_queue');
-      socket.emit('queue_joined', { queue: 'moderation' });
-      console.log(`👮 Модератор ${modUserId} присоединился к очереди`);
-    }
-  });
-  
-  socket.on('subscribe_reports', (data) => {
-    const { userId: modUserId, role } = data;
-    
-    if (['moderator', 'admin', 'lead', 'super_admin'].includes(role)) {
-      socket.join('report_notifications');
-      console.log(`🔔 Модератор ${modUserId} подписался на уведомления`);
-    }
-  });
-  
-  // Ping/Pong для поддержания соединения
-  socket.on('ping', () => {
-    socket.emit('pong', { timestamp: Date.now() });
-  });
-  
-  // Отключение
-  socket.on('disconnect', async () => {
-    console.log(`🔌 Отключение: ${socket.id} (пользователь: ${userId || 'не аутентифицирован'})`);
-    
-    if (userId) {
-      // Удаляем из списков подключений
-      if (userSockets.has(userId)) {
-        userSockets.get(userId).delete(socket.id);
-        if (userSockets.get(userId).size === 0) {
-          userSockets.delete(userId);
-          
-          // Обновляем статус пользователя
-          await pool.query(
-            'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-            ['offline', Date.now(), userId]
-          );
-          
-          // Уведомляем о выходе из сети
-          socket.broadcast.emit('user_offline', {
-            userId,
-            timestamp: Date.now()
-          });
-          
-          console.log(`👤 Пользователь ${userId} полностью отключился`);
-        }
-      }
-      
-      // Удаляем из connectedUsers
-      connectedUsers.delete(socket.id);
-    }
-  });
-  
-  socket.on('error', (error) => {
-    console.error(`❌ Ошибка сокета ${socket.id}:`, error);
   });
 });
 
-// Функция для загрузки и подписки на чаты пользователя
-async function loadAndSubscribeToChats(userId, socket) {
+app.get('/api/users/phone/:phone', async (req, res) => {
+    try {
+        const { phone } = req.params;
+        console.log('🔍 Searching user by phone:', phone);
+
+        const result = await pool.query(
+            'SELECT * FROM users WHERE phone = $1',
+            [phone]
+        );
+        
+        if (result.rows.length === 0) {
+            console.log('❌ User not found for phone:', phone);
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+        
+        const user = result.rows[0];
+        console.log('✅ User found:', user.user_id);
+
+        res.json({
+            success: true,
+            user: {
+                id: user.user_id,
+                username: user.username,
+                displayName: user.display_name,
+                phone: user.phone,
+                role: user.role,
+                status: user.status,
+                is_premium: user.is_premium,
+                authLevel: user.auth_level
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching user by phone:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Internal server error: ' + error.message 
+        });
+    }
+});
+
+// 👥 Пользователи
+app.get('/api/users', async (req, res) => {
+  console.log('📨 GET /api/users - Request received');
+  
   try {
-    // Находим все чаты пользователя
-    const result = await pool.query(
-      `SELECT id FROM chats 
-       WHERE id LIKE $1 OR id LIKE $2 OR id LIKE $3`,
-      [`%${userId}%`, `user_${userId}_%`, `%_user_${userId}`]
-    );
+    console.log('🔍 Querying database...');
+    const result = await pool.query('SELECT * FROM users');
+    console.log(`✅ Found ${result.rows.length} users`);
     
-    const userChats = result.rows.map(row => row.id);
-    
-    console.log(`📋 Пользователь ${userId} состоит в ${userChats.length} чатах`);
-    
-    // Подписываем на каждый чат
-    userChats.forEach(chatId => {
-      socket.join(chatId);
-      
-      // Добавляем в комнаты чата
-      if (!chatRooms.has(chatId)) {
-        chatRooms.set(chatId, new Set());
-      }
-      chatRooms.get(chatId).add(userId);
+    res.json({
+      success: true,
+      count: result.rows.length,
+      users: result.rows
     });
     
   } catch (error) {
-    console.error(`❌ Ошибка загрузки чатов для ${userId}:`, error);
+    console.error('❌ Database error in /api/users:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Database error: ' + error.message
+    });
   }
+});
+
+// 🔧 ЭНДПОИНТ ДЛЯ ПОИСКА ПОЛЬЗОВАТЕЛЯ ПО ТЕЛЕФОНУ
+app.get('/api/moderation/user/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    console.log('🔍 Searching user by phone:', phone);
+
+    // Форматируем номер в международный формат
+    let formattedPhone = phone;
+    if (!phone.startsWith('+')) {
+      if (phone.startsWith('7') || phone.startsWith('8')) {
+        formattedPhone = '+7' + phone.slice(1);
+      } else if (phone.length === 10) {
+        formattedPhone = '+7' + phone;
+      }
+    }
+
+    console.log('📞 Formatted phone:', formattedPhone);
+
+    const result = await pool.query(
+      'SELECT user_id, username, display_name, phone, role, status, is_premium, auth_level FROM users WHERE phone = $1',
+      [formattedPhone]
+    );
+    
+    if (result.rows.length === 0) {
+      console.log('❌ User not found for phone:', formattedPhone);
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+    }
+    
+    const user = result.rows[0];
+    console.log('✅ User found:', user.user_id);
+
+    res.json({
+      success: true,
+      user: {
+        id: user.user_id,
+        username: user.username,
+        displayName: user.display_name,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        is_premium: user.is_premium,
+        authLevel: user.auth_level
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in moderation user endpoint:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error: ' + error.message 
+    });
+  }
+});
+
+// ==================== 🤖 АВТОМАТИЧЕСКАЯ МОДЕРАЦИЯ ====================
+
+// Функция автоматической проверки сообщений
+function autoModerateMessage(text, senderId) {
+    const violations = [];
+    
+    // Запрещенные слова
+    const bannedWords = ['спам', 'мошенничество', 'взлом', 'обман', 'скам'];
+    const foundBannedWords = bannedWords.filter(word => 
+        text.toLowerCase().includes(word)
+    );
+    
+    if (foundBannedWords.length > 0) {
+        violations.push({
+            type: 'banned_words',
+            words: foundBannedWords,
+            severity: 'high'
+        });
+    }
+    
+    // Проверка на спам (повторяющиеся символы/слова)
+    const repeatedChars = /(.)\1{5,}/;
+    const repeatedWords = /\b(\w+)\b.*\b\1\b.*\b\1\b/;
+    
+    if (repeatedChars.test(text) || repeatedWords.test(text)) {
+        violations.push({
+            type: 'spam',
+            severity: 'medium'
+        });
+    }
+    
+    // Проверка на CAPS LOCK
+    const capsRatio = (text.match(/[A-ZА-Я]/g) || []).length / text.length;
+    if (capsRatio > 0.7 && text.length > 10) {
+        violations.push({
+            type: 'excessive_caps',
+            severity: 'low'
+        });
+    }
+    
+    return violations;
 }
 
-// Подключаем роуты
-app.use('/api/auth', authRoutes);
-app.use('/api/security', securityRoutes);
-app.use('/api/username', usernameRoutes);
-app.use('/api/message', messageRoutes);
-app.use('/api/chat', chatRoutes);
-app.use('/api/call', callRoutes);
-app.use('/api/moderation', moderationRoutes);
-app.use('/api/reports', reportRoutes);
-app.use('/api/templates', templateRoutes);
-app.use('/api/dashboard', dashboardRoutes);
+app.post('/api/auth/login', authController.verifyCodeAndLogin);
 
-// 🔒 ЗАЩИЩЕННЫЕ РОУТЫ
-app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
-app.use('/api/call', authMiddleware.authenticate, callRoutes);
-app.use('/api/message', authMiddleware.authenticate, messageRoutes);
+// Эндпоинт для проверки сообщения
+app.post('/api/moderation/scan-message', async (req, res) => {
+    try {
+        const { text, senderId } = req.body;
+        
+        console.log('🔍 Сканирование сообщения:', { text, senderId });
+        
+        const violations = autoModerateMessage(text, senderId);
+        const shouldBlock = violations.some(v => v.severity === 'high');
+        
+        res.json({
+            success: true,
+            violations,
+            shouldBlock,
+            action: shouldBlock ? 'block' : 'allow',
+            message: violations.length > 0 ? 'Найдены нарушения' : 'Сообщение чистое'
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка сканирования сообщения:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Scan failed' 
+        });
+    }
+});
 
-// Основные эндпоинты
+// ==================== 📝 ШАБЛОННЫЕ ОТВЕТЫ ====================
+
+// Получить шаблонные ответы
+app.get('/api/moderation/templates', async (req, res) => {
+    try {
+        const { category } = req.query;
+        
+        let query = 'SELECT * FROM template_responses';
+        let params = [];
+        
+        if (category) {
+            query += ' WHERE category = $1';
+            params.push(category);
+        }
+        
+        query += ' ORDER BY created_at DESC';
+        
+        const result = await pool.query(query, params);
+        
+        res.json({
+            success: true,
+            templates: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения шаблонов:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to get templates' 
+        });
+    }
+});
+
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
+app.get('/api/users/search', async (req, res) => {
+    console.log('🎯 ОБРАБОТЧИК ПОИСКА ВЫЗВАН!');
+    
+    try {
+        const query = req.query.query || '';
+        console.log('🔍 Запрос:', query);
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                users: []
+            });
+        }
+        
+        const cleanQuery = query.replace('@', '').trim();
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image, status, bio, phone
+             FROM users 
+             WHERE username ILIKE $1 OR display_name ILIKE $1
+             LIMIT 20`,
+            [`%${cleanQuery}%`]
+        );
+        
+        // Преобразуем snake_case в camelCase
+        const formattedUsers = result.rows.map(user => ({
+            id: user.user_id, 
+            user_id: user.user_id, 
+            username: user.username || user.phone || 'user',
+            display_name: user.display_name || 'Пользователь', 
+            displayName: user.display_name || 'Пользователь', 
+            profile_image: user.profile_image,
+            profileImage: user.profile_image,
+            status: user.status || 'offline',
+            bio: user.bio || '',
+            phone: user.phone || ''
+        }));
+
+        res.json({
+            success: true,
+            count: formattedUsers.length,
+            users: formattedUsers
+        });
+        
+    } catch (error) {
+        console.error('❌ Search error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
+        });
+    }
+});
+
+// ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ПО USERNAME ====================
+app.get('/api/users/search/username/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        console.log('🔍 Searching user by username:', username);
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image, status, bio
+             FROM users 
+             WHERE username ILIKE $1 
+             ORDER BY 
+                 CASE 
+                     WHEN username = $1 THEN 1
+                     WHEN username ILIKE $2 THEN 2
+                     ELSE 3
+                 END
+             LIMIT 20`,
+            [`%${username}%`, `${username}%`]
+        );
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching users by username:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Search failed'
+        });
+    }
+});
+
+// ==================== 👤 ПОЛУЧИТЬ ПОЛЬЗОВАТЕЛЯ ПО ID ====================
+app.get('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // 🔥 ВАЖНО: Если userId = "search" - это уже обработано выше!
+        if (userId === 'search') {
+            return res.status(400).json({ 
+                error: 'Invalid user ID' 
+            });
+        }
+        
+        const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log('✅ Пользователь найден:', result.rows[0].username);
+        res.json(result.rows[0]);
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения пользователя:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ==================== ✏️ ОБНОВИТЬ ПРОФИЛЬ ====================
+app.put('/api/users/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { display_name, username, bio, phone } = req.body;
+
+        console.log('✏️ Updating profile:', { userId, username });
+
+        // 🔥 ПРАВИЛЬНАЯ ПРОВЕРКА: 
+        const currentUser = await pool.query(
+            'SELECT username FROM users WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (currentUser.rows.length > 0) {
+            const currentUsername = currentUser.rows[0].username;
+            
+            if (currentUsername !== username) {
+                const checkResult = await pool.query(
+                    'SELECT user_id FROM users WHERE username = $1',
+                    [username]
+                );
+                
+                if (checkResult.rows.length > 0) {
+                    return res.status(400).json({ 
+                        success: false,
+                        error: 'Username already taken' 
+                    });
+                }
+            }
+        }
+
+        const result = await pool.query(
+            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
+            [display_name, username, bio, phone, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'User not found' 
+            });
+        }
+
+        const updatedUser = result.rows[0];
+        
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            user: updatedUser
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating profile:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Server error' 
+        });
+    }
+});
+
+// Модель для хранения звонков в базе
+app.get('/api/calls/history/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        const result = await pool.query(
+            `SELECT * FROM calls 
+             WHERE from_user_id = $1 OR to_user_id = $1 
+             ORDER BY created_at DESC 
+             LIMIT 50`,
+            [userId]
+        );
+
+        console.log('📞 Call history loaded for user:', userId, 'calls:', result.rows.length);
+        
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error('❌ Error loading call history:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка загрузки истории звонков' 
+        });
+    }
+});
+
+// ==================== ⚙️ СИСТЕМА НАСТРОЕК ====================
+
+// Эндпоинт для обновления настроек пользователя
+app.put('/api/users/:userId/settings', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { 
+            messageNotifications = true, 
+            callNotifications = true, 
+            notificationSound = true, 
+            onlineStatus = true, 
+            readReceipts = true 
+        } = req.body;
+
+        console.log('⚙️ Updating settings for user:', userId, { 
+            messageNotifications, callNotifications, notificationSound, onlineStatus, readReceipts 
+        });
+
+        // Проверяем существование пользователя
+        const userCheck = await pool.query(
+            'SELECT * FROM users WHERE user_id = $1',
+            [userId]
+        );
+
+        if (userCheck.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        // Обновляем настройки в базе
+        const result = await pool.query(
+            `UPDATE users SET 
+                message_notifications = $1,
+                call_notifications = $2, 
+                notification_sound = $3,
+                online_status = $4,
+                read_receipts = $5,
+                settings_updated_at = $6
+             WHERE user_id = $7 RETURNING *`,
+            [messageNotifications, callNotifications, notificationSound, onlineStatus, readReceipts, new Date(), userId]
+        );
+
+        const updatedUser = result.rows[0];
+        console.log('✅ Settings updated for user:', userId);
+        
+        res.json({
+            success: true,
+            message: 'Настройки успешно обновлены',
+            user: {
+                message_notifications: updatedUser.message_notifications,
+                call_notifications: updatedUser.call_notifications,
+                notification_sound: updatedUser.notification_sound,
+                online_status: updatedUser.online_status,
+                read_receipts: updatedUser.read_receipts
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating settings:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка обновления настроек: ' + error.message 
+        });
+    }
+});
+
+// Эндпоинт для получения настроек пользователя
+app.get('/api/users/:userId/settings', async (req, res) => {
+    try {
+        const { userId } = req.params;
+
+        console.log('⚙️ Getting settings for user:', userId);
+
+        const result = await pool.query(
+            `SELECT 
+                message_notifications,
+                call_notifications,
+                notification_sound, 
+                online_status,
+                read_receipts,
+                settings_updated_at
+             FROM users WHERE user_id = $1`,
+            [userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Пользователь не найден' 
+            });
+        }
+
+        const settings = result.rows[0];
+        console.log('✅ Settings loaded for user:', userId);
+        
+        res.json({
+            success: true,
+            settings: settings
+        });
+
+    } catch (error) {
+        console.error('❌ Error getting settings:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка получения настроек: ' + error.message 
+        });
+    }
+});
+// Создать шаблонный ответ
+app.post('/api/moderation/templates', async (req, res) => {
+    try {
+        const { title, content, category, createdBy } = req.body;
+        
+        const templateId = 'template_' + Date.now();
+        
+        const result = await pool.query(
+            `INSERT INTO template_responses (id, title, content, category, created_by)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [templateId, title, content, category, createdBy]
+        );
+        
+        console.log('✅ Шаблон создан:', title);
+        
+        res.json({
+            success: true,
+            message: 'Template created successfully',
+            template: result.rows[0]
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка создания шаблона:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Failed to create template' 
+        });
+    }
+});
+
+// Использовать шаблон для ответа на жалобу
+app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
+  try {
+    const { reportId } = req.params;
+    const { templateId, moderatorId, additionalNotes } = req.body;
+        
+        // Получаем шаблон
+        const templateResult = await pool.query(
+            'SELECT * FROM template_responses WHERE id = $1',
+            [templateId]
+        );
+        
+        if (templateResult.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Template not found' 
+            });
+        }
+        
+        const template = templateResult.rows[0];
+        
+        // Обновляем жалобу
+        const resolution = additionalNotes 
+            ? `${template.content}\n\nДополнительно: ${additionalNotes}`
+            : template.content;
+            
+        const result = await pool.query(
+            `UPDATE reports 
+             SET status = 'resolved', resolution = $1, resolved_at = $2, assigned_moderator_id = $3
+             WHERE id = $4 RETURNING *`,
+            [resolution, Date.now(), moderatorId, reportId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: 'Report not found' 
+            });
+        }
+        
+        const report = result.rows[0];
+    
+    io.emit('report_resolved', report);
+    
+    res.json({
+      success: true,
+      message: 'Report resolved with template',
+      report: report,
+      templateUsed: template.title
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка ответа на жалобу:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to respond to report' 
+    });
+  }
+});
+
+// ==================== 👤 ПРОВЕРКА USERNAME ====================
+app.get('/api/username/check/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        console.log('🔍 Checking username:', username);
+        
+        // Проверяем, занят ли username
+        const result = await pool.query(
+            'SELECT user_id FROM users WHERE username ILIKE $1',
+            [username]
+        );
+        
+        const isAvailable = result.rows.length === 0;
+        
+        res.json({
+            success: true,
+            available: isAvailable,
+            message: isAvailable 
+                ? 'Username available' 
+                : 'Username already taken'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error checking username:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Server error' 
+        });
+    }
+});
+
+// ==================== ✏️ ОБНОВИТЬ USERNAME ====================
+app.put('/api/users/:userId/username', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const { username } = req.body;
+        
+        console.log('✏️ Updating username:', { userId, username });
+        
+        // Проверяем, не занят ли новый username другим пользователем
+        const checkResult = await pool.query(
+            'SELECT user_id FROM users WHERE username ILIKE $1 AND user_id != $2',
+            [username, userId]
+        );
+        
+        if (checkResult.rows.length > 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username already taken'
+            });
+        }
+        
+        // Обновляем username
+        const updateResult = await pool.query(
+            'UPDATE users SET username = $1 WHERE user_id = $2 RETURNING *',
+            [username, userId]
+        );
+        
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Username updated successfully',
+            user: updateResult.rows[0]
+        });
+        
+    } catch (error) {
+        console.error('❌ Error updating username:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Server error' 
+        });
+    }
+});
+
+// ==================== 🛡️ СИСТЕМА МОДЕРАЦИИ ====================
+
+// 📋 Получить очередь жалоб
+app.get('/api/moderation/reports', async (req, res) => {
+  try {
+    const { status = 'pending', limit = 50 } = req.query;
+    
+    const result = await pool.query(
+      `SELECT r.*, 
+              reporter.username as reporter_username,
+              reported.username as reported_username,
+              reporter.is_premium as is_premium
+       FROM reports r
+       LEFT JOIN users reporter ON r.reporter_id = reporter.user_id
+       LEFT JOIN users reported ON r.reported_user_id = reported.user_id
+       WHERE r.status = $1
+       ORDER BY 
+         reporter.is_premium DESC,
+         r.priority DESC,
+         r.created_at ASC
+       LIMIT $2`,
+      [status, parseInt(limit)]
+    );
+    
+    console.log(`✅ Получено жалоб: ${result.rows.length}`);
+    
+    res.json({
+      success: true,
+      count: result.rows.length,
+      reports: result.rows
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения жалоб:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get reports' 
+    });
+  }
+});
+
+// 📨 Отправить жалобу
+app.post('/api/moderation/reports', async (req, res) => {
+  try {
+    const { reporterId, reportedUserId, messageId, reason } = req.body;
+    
+    console.log('🆘 Новая жалоба:', { reporterId, reportedUserId, reason });
+    
+    const reportId = 'report_' + Date.now();
+    
+    // Проверяем премиум статус
+    const reporterResult = await pool.query(
+      'SELECT is_premium FROM users WHERE user_id = $1',
+      [reporterId]
+    );
+    
+    const isPremium = reporterResult.rows[0]?.is_premium || false;
+    
+    // Определяем приоритет
+    let priority = 'medium';
+    if (isPremium) priority = 'high';
+    
+    // Критические ключевые слова
+    const criticalKeywords = ['спам', 'мошенничество', 'угрозы'];
+    if (criticalKeywords.some(word => reason.toLowerCase().includes(word))) {
+      priority = 'critical';
+    }
+    
+    const result = await pool.query(
+      `INSERT INTO reports (id, reporter_id, reported_user_id, reported_message_id, reason, priority, is_premium)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [reportId, reporterId, reportedUserId, messageId, reason, priority, isPremium]
+    );
+    
+    const report = result.rows[0];
+    
+    io.emit('new_report', report);
+    
+    console.log('✅ Жалоба создана:', report.id);
+    
+    res.json({
+      success: true,
+      message: 'Report submitted successfully',
+      report: report
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка создания жалобы:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to submit report' 
+    });
+  }
+});
+
+// 👮 Назначить жалобу модератору
+app.patch('/api/moderation/reports/:reportId/assign', async (req, res) => {
+  try {
+    const { reportId } = req.params;
+    const { moderatorId } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE reports 
+       SET status = 'in_progress', assigned_moderator_id = $1
+       WHERE id = $2 RETURNING *`,
+      [moderatorId, reportId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Report not found' 
+      });
+    }
+    
+    const report = result.rows[0];
+    
+    io.emit('report_updated', report);
+    
+    res.json({
+      success: true,
+      message: 'Report assigned to moderator',
+      report: report
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка назначения жалобы:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to assign report' 
+    });
+  }
+});
+
+// 📊 Дашборд модерации
+app.get('/api/moderation/dashboard', async (req, res) => {
+  try {
+    const { period = '7d' } = req.query;
+    const startTime = Date.now() - (7 * 24 * 60 * 60 * 1000); // 7 дней
+    
+    const [
+      totalReports,
+      resolvedReports,
+      pendingReports,
+      avgResolutionTime
+    ] = await Promise.all([
+      // Всего жалоб
+      pool.query('SELECT COUNT(*) FROM reports WHERE created_at > $1', [startTime]),
+      // Решенные жалобы
+      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1 AND created_at > $1', ['resolved', startTime]),
+      // Ожидающие жалобы
+      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1', ['pending']),
+      // Среднее время решения
+      pool.query(`
+        SELECT AVG(resolved_at - created_at) as avg_time 
+        FROM reports 
+        WHERE status = 'resolved' AND resolved_at IS NOT NULL
+      `)
+    ]);
+    
+    const stats = {
+      totalReports: parseInt(totalReports.rows[0].count),
+      resolvedReports: parseInt(resolvedReports.rows[0].count),
+      pendingReports: parseInt(pendingReports.rows[0].count),
+      resolutionRate: totalReports.rows[0].count > 0 
+        ? ((resolvedReports.rows[0].count / totalReports.rows[0].count) * 100).toFixed(1)
+        : 0,
+      avgResolutionTime: avgResolutionTime.rows[0].avg_time 
+        ? Math.round(avgResolutionTime.rows[0].avg_time / 60000) // в минуты
+        : 0
+    };
+    
+    res.json({
+      success: true,
+      period: period,
+      stats: stats
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения дашборда:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to get dashboard' 
+    });
+  }
+});
+
+// ==================== 📋 ПОЛУЧИТЬ ВСЕ ГРУППЫ ====================
+app.get('/api/groups', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT g.*, COUNT(gm.user_id) as member_count
+            FROM groups g
+            LEFT JOIN group_members gm ON g.id = gm.group_id
+            GROUP BY g.id
+            ORDER BY g.created_at DESC
+        `);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('❌ Error getting groups:', error);
+        res.status(500).json({ error: 'Failed to get groups' });
+    }
+});
+
+// ==================== 🔍 ПОИСК ГРУПП ====================
+app.get('/api/groups/search', async (req, res) => {
+    try {
+        const { query } = req.query;
+        
+        if (!query || query.length < 2) {
+            return res.json([]);
+        }
+        
+        const result = await pool.query(`
+            SELECT g.*, COUNT(gm.user_id) as member_count
+            FROM groups g
+            LEFT JOIN group_members gm ON g.id = gm.group_id
+            WHERE g.name ILIKE $1 OR g.description ILIKE $1
+            GROUP BY g.id
+            ORDER BY g.created_at DESC
+        `, [`%${query}%`]);
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('❌ Error searching groups:', error);
+        res.status(500).json({ error: 'Search failed' });
+    }
+});
+
+// Создать группу
+app.post('/api/groups', async (req, res) => {
+  try {
+    const { name, description, createdBy } = req.body;
+    const groupId = 'group_' + Date.now();
+    
+    console.log('👥 Создание группы:', { name, createdBy });
+    
+    const result = await pool.query(
+      `INSERT INTO groups (id, name, description, created_by, created_at) 
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [groupId, name, description, createdBy, Date.now()]
+    );
+
+    // Добавляем создателя как администратора
+    await pool.query(
+      'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3)',
+      [groupId, createdBy, 'admin']
+    );
+
+    const group = result.rows[0];
+    group.members = {
+      [createdBy]: 'admin'
+    };
+
+    console.log('✅ Группа создана:', group.name);
+    res.status(201).json(group);
+  } catch (error) {
+    console.error('❌ Ошибка создания группы:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Добавить пользователя в группу
+app.post('/api/groups/:groupId/members', async (req, res) => {
+  try {
+    const { groupId } = req.params;
+    const { userId, role = 'member' } = req.body;
+
+    console.log('👥 Добавление пользователя в группу:', { groupId, userId, role });
+
+    const result = await pool.query(
+      'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3) RETURNING *',
+      [groupId, userId, role]
+    );
+
+    console.log('✅ Пользователь добавлен в группу');
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('❌ Ошибка добавления пользователя в группу:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Получить группы пользователя
+app.get('/api/users/:userId/groups', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const result = await pool.query(
+      `SELECT g.*, gm.role 
+       FROM groups g
+       JOIN group_members gm ON g.id = gm.group_id
+       WHERE gm.user_id = $1
+       ORDER BY g.created_at DESC`,
+      [userId]
+    );
+
+    console.log(`✅ Найдено групп для пользователя ${userId}: ${result.rows.length}`);
+    res.json(result.rows);
+  } catch (error) {
+    console.error('❌ Ошибка получения групп пользователя:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================== 🔍 ПОИСК ПО USERNAME ДЛЯ УПОМИНАНИЙ ====================
+app.get('/api/username/search', async (req, res) => {
+    try {
+        let { query } = req.query;
+        
+        if (query) {
+            query = decodeURIComponent(query);
+        }
+        
+        if (!query || query.trim().length < 2) {
+            return res.json({
+                success: true,
+                users: []
+            });
+        }
+        
+        console.log('🔍 Searching by username for mentions:', query);
+        
+        const result = await pool.query(
+            `SELECT user_id, username, display_name, profile_image
+             FROM users 
+             WHERE username ILIKE $1
+             ORDER BY 
+                 CASE WHEN username = $2 THEN 1
+                      WHEN username ILIKE $3 THEN 2
+                      ELSE 3 END
+             LIMIT 10`,
+            [`%${query}%`, query, `${query}%`]
+        );
+        
+        res.json({
+            success: true,
+            users: result.rows
+        });
+        
+    } catch (error) {
+        console.error('❌ Username search error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Username search failed'
+        });
+    }
+});
+
+// ==================== 🎯 ОСНОВНЫЕ ЭНДПОИНТЫ ====================
 
 // Корневой эндпоинт
 app.get('/', (req, res) => {
@@ -1054,15 +1819,12 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     status: 'running',
     timestamp: new Date().toISOString(),
-    socketStatus: 'active',
-    connectedUsers: connectedUsers.size,
-    activeChats: chatRooms.size,
     endpoints: {
       auth: '/api/auth',
       users: '/api/users',
       chats: '/api/chats',
       messages: '/api/messages',
-      calls: '/api/calls',
+      groups: '/api/groups',
       moderation: '/api/moderation',
       security: '/api/security'
     }
@@ -1072,17 +1834,14 @@ app.get('/', (req, res) => {
 // Health check
 app.get('/health', async (req, res) => {
   try {
+    // Проверяем подключение к базе данных
     await pool.query('SELECT 1');
     
     res.json({
       status: 'healthy',
       database: 'connected',
-      socketIo: 'active',
-      connectedUsers: connectedUsers.size,
-      activeChats: chatRooms.size,
       timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      memory: process.memoryUsage()
+      uptime: process.uptime()
     });
   } catch (error) {
     res.status(503).json({
@@ -1094,141 +1853,44 @@ app.get('/health', async (req, res) => {
   }
 });
 
-// Статистика WebSocket
-app.get('/api/ws/stats', (req, res) => {
-  const stats = {
-    connectedUsers: connectedUsers.size,
-    userSockets: Array.from(userSockets.entries()).map(([userId, sockets]) => ({
-      userId,
-      socketCount: sockets.size
-    })),
-    chatRooms: Array.from(chatRooms.entries()).map(([chatId, users]) => ({
-      chatId,
-      userCount: users.size,
-      users: Array.from(users)
-    })),
-    totalSockets: io.engine.clientsCount
-  };
-  
-  res.json(stats);
-});
-
-// Создать chatId для двух пользователей
-app.get('/api/chat/create-id', (req, res) => {
-  const { userId1, userId2 } = req.query;
-  
-  if (!userId1 || !userId2) {
-    return res.status(400).json({ error: 'Необходимы оба userId' });
-  }
-  
-  const chatId = createChatId(userId1, userId2);
-  
-  res.json({
-    chatId,
-    participants: extractParticipantIds(chatId)
-  });
-});
-
-// Проверить доставку сообщения
-app.get('/api/message/delivery/:messageId', async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    
-    const result = await pool.query(
-      'SELECT * FROM messages WHERE id = $1',
-      [messageId]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Сообщение не найдено' });
-    }
-    
-    const message = result.rows[0];
-    const participants = extractParticipantIds(message.chat_id);
-    
-    const deliveryStatus = {
-      messageId: message.id,
-      chatId: message.chat_id,
-      senderId: message.sender_id,
-      status: message.status,
-      timestamp: message.timestamp,
-      participants,
-      onlineParticipants: participants.filter(id => userSockets.has(id)),
-      offlineParticipants: participants.filter(id => !userSockets.has(id))
-    };
-    
-    res.json(deliveryStatus);
-    
-  } catch (error) {
-    console.error('❌ Ошибка проверки доставки:', error);
-    res.status(500).json({ error: 'Ошибка сервера' });
-  }
-});
-
 // Обработка 404
 app.use('*', (req, res) => {
   res.status(404).json({
-    error: 'Эндпоинт не найден',
+    error: 'Endpoint not found',
     path: req.originalUrl,
-    method: req.method,
-    timestamp: new Date().toISOString()
+    method: req.method
   });
 });
 
 // Глобальный обработчик ошибок
 app.use((error, req, res, next) => {
-  console.error('🔥 Глобальная ошибка:', error);
-  
+  console.error('🔥 Global error handler:', error);
   res.status(500).json({
-    error: 'Внутренняя ошибка сервера',
-    message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong',
-    timestamp: new Date().toISOString()
+    error: 'Internal server error',
+    message: error.message
   });
 });
 
-// Очистка при завершении
-process.on('SIGINT', async () => {
-  console.log('\n🔻 Завершение работы сервера...');
-  
-  // Обновляем статусы всех онлайн пользователей
-  for (const [userId] of userSockets) {
-    try {
-      await pool.query(
-        'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-        ['offline', Date.now(), userId]
-      );
-    } catch (error) {
-      console.error(`❌ Ошибка обновления статуса ${userId}:`, error);
-    }
-  }
-  
-  console.log('✅ Статусы пользователей обновлены');
-  process.exit(0);
+// Инициализируем базу при запуске
+initializeDatabase().then(() => {
+  console.log('✅ Database initialization completed');
+}).catch(error => {
+  console.error('❌ Database initialization failed:', error);
 });
 
 // Запуск сервера
-async function startServer() {
-  try {
-    // Инициализируем базу данных
-    await initializeDatabase();
-    console.log('✅ База данных готова');
-    
-    // Запускаем сервер
-    server.listen(port, '0.0.0.0', () => {
-      console.log(`🚀 Сервер запущен на порту ${port}`);
-      console.log(`🔗 HTTP: http://localhost:${port}`);
-      console.log(`🔗 WebSocket: ws://localhost:${port}`);
-      console.log(`🔗 Health check: http://localhost:${port}/health`);
-      console.log(`🔗 WebSocket stats: http://localhost:${port}/api/ws/stats`);
-      console.log(`👥 Подключенные пользователи: 0`);
-      console.log(`💬 Активные чаты: 0`);
-      console.log('🚀 ======= СЕРВЕР ЗАПУЩЕН =======');
-    });
-    
-  } catch (error) {
-    console.error('❌ Ошибка запуска сервера:', error);
-    process.exit(1);
-  }
-}
-
-startServer();
+server.listen(port, '0.0.0.0', () => {
+  console.log(`🚀 Messenger backend running on port ${port}`);
+  console.log(`🔗 WebSocket server ready`);
+  console.log(`📊 Database: PostgreSQL`);
+  console.log(`🔐 Auth endpoints: /api/auth/register, /api/auth/multi-level-login`);
+  console.log(`💬 Chat endpoints: /api/chats, /api/messages, /api/messages/send`);
+  console.log(`👥 Group endpoints: /api/groups, /api/groups/:id`);
+  console.log(`🛡️ Moderation endpoints: /api/moderation/*`);
+  console.log(`🔒 Security endpoints: /api/security/*`);
+  console.log(`⏰ Started at: ${new Date().toISOString()}`);
+  console.log(`🌐 Health check: http://localhost:${port}/health`);
+  console.log('🚀 ======= SERVER STARTED =======');
+  console.log('🕒 Time:', new Date().toISOString());
+  console.log('📁 Current directory:', __dirname);
+});
