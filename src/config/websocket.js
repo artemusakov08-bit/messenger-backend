@@ -100,8 +100,6 @@ class WebSocketConfig {
 
     broadcastToRole(role, message) {
         this.clients.forEach((client, userId) => {
-            // Здесь нужно проверять роль пользователя
-            // Для простоты отправляем всем модераторам
             if (client.readyState === WebSocket.OPEN) {
                 client.send(JSON.stringify(message));
             }

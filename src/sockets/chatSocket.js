@@ -5,10 +5,13 @@ const pool = require('../config/database');
 class ChatSocket {
     constructor(wss) {
         this.wss = wss;
-        this.userConnections = new Map(); // userId -> Set(WebSocket)
-        this.chatSubscriptions = new Map(); // chatId -> Set(userId)
-        this.userChats = new Map(); // userId -> Set(chatId)
+        this.userConnections = new Map(); // userId (numeric) -> Set(WebSocket)
+        this.chatSubscriptions = new Map(); // chatId -> Set(userId numeric)
+        this.userChats = new Map(); // userId (numeric) -> Set(chatId)
         this.setupConnection();
+        
+        // Периодическая очистка мертвых соединений
+        setInterval(() => this.cleanupDeadConnections(), 30000);
     }
 
     setupConnection() {
@@ -18,13 +21,25 @@ class ChatSocket {
             let userId = null;
             let userChats = new Set();
             
+            // Устанавливаем таймаут на аутентификацию
+            const authTimeout = setTimeout(() => {
+                if (!userId) {
+                    console.log('⏰ Таймаут аутентификации');
+                    ws.close(1008, 'Authentication timeout');
+                }
+            }, 10000);
+            
             ws.on('message', async (data) => {
                 try {
                     const message = JSON.parse(data);
-                    console.log(`📨 WS сообщение от ${userId || 'anonymous'}:`, message.type);
+                    console.log(`📨 WS сообщение ${message.type}`, {
+                        from: userId || 'anonymous',
+                        chat: message.chatId || 'none'
+                    });
                     
                     switch (message.type) {
                         case 'authenticate':
+                            clearTimeout(authTimeout);
                             userId = await this.handleAuthentication(ws, message.token);
                             if (userId) {
                                 userChats = await this.loadUserChats(userId);
@@ -72,6 +87,10 @@ class ChatSocket {
                             }));
                             break;
                             
+                        case 'debug_info':
+                            this.sendDebugInfo(ws, userId);
+                            break;
+                            
                         default:
                             console.warn(`⚠️ Неизвестный тип сообщения: ${message.type}`);
                     }
@@ -81,16 +100,20 @@ class ChatSocket {
                 }
             });
 
-            ws.on('close', () => {
-                console.log(`🔌 Закрыто соединение ${userId ? `для ${userId}` : 'anonymous'}`);
+            ws.on('close', (code, reason) => {
+                console.log(`🔌 Закрыто соединение ${userId ? `для ${userId}` : 'anonymous'}`, {
+                    code,
+                    reason: reason.toString()
+                });
                 if (userId) {
                     this.handleDisconnect(userId, ws);
-                    this.unsubscribeFromAllChats(userId, ws);
                 }
+                clearTimeout(authTimeout);
             });
 
             ws.on('error', (error) => {
                 console.error('❌ WebSocket ошибка:', error);
+                clearTimeout(authTimeout);
             });
         });
     }
@@ -100,32 +123,43 @@ class ChatSocket {
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
             const userId = decoded.userId;
             
-            // Добавляем соединение для пользователя
-            if (!this.userConnections.has(userId)) {
-                this.userConnections.set(userId, new Set());
+            if (!userId) {
+                throw new Error('User ID not found in token');
             }
-            this.userConnections.get(userId).add(ws);
             
-            // Сохраняем userId в объекте WebSocket
-            ws.userId = userId;
+            // Убедимся, что userId - число (преобразуем если строка)
+            const numericUserId = String(userId).replace(/\D/g, '');
             
-            console.log(`✅ Аутентифицирован пользователь: ${userId}`);
+            if (!numericUserId) {
+                throw new Error('Invalid user ID format');
+            }
+            
+            // Добавляем соединение для пользователя
+            if (!this.userConnections.has(numericUserId)) {
+                this.userConnections.set(numericUserId, new Set());
+            }
+            this.userConnections.get(numericUserId).add(ws);
+            
+            // Сохраняем ID в объекте WebSocket
+            ws.userId = numericUserId;
+            
+            console.log(`✅ Аутентифицирован пользователь: ${numericUserId}`);
             
             ws.send(JSON.stringify({
                 type: 'authenticated',
-                userId,
+                userId: numericUserId,
                 timestamp: Date.now()
             }));
             
-            return userId;
+            return numericUserId;
             
         } catch (error) {
-            console.error('❌ Ошибка аутентификации:', error);
+            console.error('❌ Ошибка аутентификации:', error.message);
             ws.send(JSON.stringify({
                 type: 'auth_error',
-                message: 'Invalid or expired token'
+                message: error.message
             }));
-            ws.close();
+            ws.close(1008, 'Authentication failed');
             return null;
         }
     }
@@ -135,7 +169,7 @@ class ChatSocket {
             const result = await pool.query(
                 `SELECT id FROM chats 
                  WHERE id LIKE $1 OR id LIKE $2 OR id LIKE $3`,
-                [`%${userId}%`, `${userId}_%`, `%_${userId}`]
+                [`%user_${userId}%`, `user_${userId}_%`, `%_user_${userId}`]
             );
             
             const userChats = new Set();
@@ -154,7 +188,6 @@ class ChatSocket {
         userChats.forEach(chatId => {
             this.subscribeToChat(userId, chatId);
             
-            // Отправляем уведомление о подписке
             ws.send(JSON.stringify({
                 type: 'subscribed_to_chat',
                 chatId,
@@ -166,15 +199,14 @@ class ChatSocket {
     async handleJoinChat(userId, chatId, ws) {
         try {
             // Проверяем, имеет ли пользователь доступ к чату
-            if (!chatId.includes(userId)) {
+            const participants = this.extractParticipantIds(chatId);
+            if (!participants.includes(userId)) {
                 throw new Error(`User ${userId} has no access to chat ${chatId}`);
             }
             
             await this.ensureChatExists(chatId, userId);
-            
             this.subscribeToChat(userId, chatId);
             
-            // Отправляем подтверждение
             ws.send(JSON.stringify({
                 type: 'joined_chat',
                 chatId,
@@ -203,44 +235,28 @@ class ChatSocket {
         this.chatSubscriptions.get(chatId).add(userId);
     }
 
-    handleLeaveChat(userId, chatId, ws) {
-        // Удаляем из подписок чата
-        if (this.chatSubscriptions.has(chatId)) {
-            this.chatSubscriptions.get(chatId).delete(userId);
-        }
-        
-        // Удаляем из чатов пользователя
-        if (this.userChats.has(userId)) {
-            this.userChats.get(userId).delete(chatId);
-        }
-        
-        console.log(`🔗 Пользователь ${userId} покинул чат ${chatId}`);
-        
-        ws.send(JSON.stringify({
-            type: 'left_chat',
-            chatId,
-            timestamp: Date.now()
-        }));
-    }
-
     async handleSendMessage(userId, messageData) {
         try {
             const { chatId, text, type = 'text', senderName } = messageData;
             
-            console.log(`📤 ${userId} отправляет сообщение в ${chatId}`);
+            console.log(`📤 ${userId} отправляет сообщение в ${chatId}:`, {
+                text: text.substring(0, 100),
+                type
+            });
 
-            await this.updateChatTimestamp(chatId, text);
-            
-            console.log(`📤 ${userId} отправляет сообщение в ${chatId}: "${text.substring(0, 50)}..."`);
-            
-            // Проверяем доступ к чату
-            if (!chatId.includes(userId)) {
+            // 1. Проверяем доступ к чату
+            const participants = this.extractParticipantIds(chatId);
+            if (!participants.includes(userId)) {
                 throw new Error(`User ${userId} has no access to chat ${chatId}`);
             }
             
+            // 2. Обеспечиваем существование чата
             await this.ensureChatExists(chatId, userId);
             
-            // Сохраняем в БД
+            // 3. Обновляем таймстамп чата
+            await this.updateChatTimestamp(chatId, text);
+            
+            // 4. Сохраняем сообщение в БД
             const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             
             const result = await pool.query(
@@ -251,24 +267,19 @@ class ChatSocket {
 
             const savedMessage = result.rows[0];
             
-            // Обновляем таймстамп чата
-            await pool.query(
-                'UPDATE chats SET timestamp = $1 WHERE id = $2',
-                [Date.now(), chatId]
-            );
-            
-            // Подготавливаем данные для отправки
+            // 5. Подготавливаем данные для отправки
             const messageForClients = {
                 type: 'new_message',
                 chatId,
                 message: savedMessage,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                senderId: userId
             };
             
-            // Отправляем сообщение всем подписанным на чат
+            // 6. Отправляем сообщение всем участникам чата
             this.broadcastToChat(chatId, messageForClients, userId);
             
-            // Отправляем подтверждение отправителю
+            // 7. Отправляем подтверждение отправителю
             this.sendToUser(userId, {
                 type: 'message_sent',
                 messageId,
@@ -277,10 +288,13 @@ class ChatSocket {
                 timestamp: Date.now()
             });
             
-            // Уведомляем об обновлении списка чатов
+            // 8. Уведомляем об обновлении списка чатов
             this.notifyChatListUpdate(chatId);
             
             console.log(`✅ Сообщение ${messageId} доставлено в чат ${chatId}`);
+            
+            // 9. Логируем статистику
+            this.logMessageStats(chatId, userId);
             
         } catch (error) {
             console.error('❌ Ошибка отправки сообщения через WS:', error);
@@ -292,73 +306,78 @@ class ChatSocket {
         }
     }
 
-    getChatParticipants(chatId) {
+    // Ключевой метод: извлечение ID участников из chatId
+    extractParticipantIds(chatId) {
         try {
-            console.log(`🔍 Разбор chatId: ${chatId}`);
+            // Формат: "user_123456_user_789012" или "123456_789012"
+            console.log(`🔍 Извлекаем участников из chatId: ${chatId}`);
             
-            const parts = chatId.split('_');
-            console.log(`🔍 Части chatId:`, parts);
+            // Удаляем префикс "user_" если есть
+            const cleanChatId = chatId.replace(/user_/g, '');
             
-            if (parts.length < 4) {
-                console.error(`❌ Неверный формат chatId: ${chatId}, частей: ${parts.length}`);
+            // Разделяем по "_"
+            const parts = cleanChatId.split('_');
+            
+            if (parts.length < 2) {
+                console.error(`❌ Неверный формат chatId: ${chatId}`);
                 return [];
             }
             
-            const user1 = parts[0] + '_' + parts[1];  // "user_1766839332356"
-            const user2 = parts[2] + '_' + parts[3];  // "user_1766839575568"
+            // Первые два числа - это ID участников
+            const participant1 = parts[0];
+            const participant2 = parts[1];
             
-            console.log(`🔍 Участники чата: ${user1}, ${user2}`);
-            return [user1, user2];
+            console.log(`🔍 Участники (числовые ID): ${participant1}, ${participant2}`);
+            return [participant1, participant2];
             
         } catch (error) {
-            console.error(`❌ Ошибка разбора chatId ${chatId}:`, error);
+            console.error(`❌ Ошибка извлечения участников из ${chatId}:`, error);
             return [];
         }
     }
 
     async updateChatTimestamp(chatId, lastMessage = null) {
         try {
-            const pool = require('../config/database');
-            
             const chatCheck = await pool.query(
                 'SELECT id FROM chats WHERE id = $1',
                 [chatId]
             );
             
             if (chatCheck.rows.length === 0) {
-                // Если чата нет, получаем участников и создаем
-                const parts = chatId.split('_');
-                const [userId1, userId2] = parts;
+                // Получаем участников и имя чата
+                const participants = this.extractParticipantIds(chatId);
+                const [userId1, userId2] = participants;
                 
-                // Получаем имя второго пользователя
+                // Находим отправителя и получателя
+                const senderId = participants[0]; // упрощенно
+                
+                // Получаем имя другого пользователя для названия чата
+                const otherUserId = participants.find(id => id !== senderId) || userId2;
+                
                 const userResult = await pool.query(
                     'SELECT display_name FROM users WHERE user_id = $1',
-                    [userId2]
+                    [otherUserId]
                 );
                 
                 const chatName = userResult.rows.length > 0 
                     ? userResult.rows[0].display_name 
-                    : `User ${userId2.slice(-4)}`;
+                    : `User ${otherUserId.slice(-4)}`;
                 
                 await pool.query(
                     `INSERT INTO chats (id, name, type, timestamp, last_message) 
                     VALUES ($1, $2, $3, $4, $5)`,
                     [chatId, chatName, 'private', Date.now(), lastMessage]
                 );
-            } else {
-                // Обновляем существующий чат
-                const updateQuery = lastMessage 
-                    ? `UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3`
-                    : `UPDATE chats SET timestamp = $1 WHERE id = $2`;
                 
-                const params = lastMessage 
-                    ? [Date.now(), lastMessage, chatId]
-                    : [Date.now(), chatId];
-                    
-                await pool.query(updateQuery, params);
+                console.log(`✅ Чат создан: ${chatId} (${chatName})`);
+            } else {
+                await pool.query(
+                    `UPDATE chats SET timestamp = $1, last_message = COALESCE($2, last_message) WHERE id = $3`,
+                    [Date.now(), lastMessage, chatId]
+                );
+                
+                console.log(`🔄 Чат обновлен: ${chatId}`);
             }
-            
-            console.log(`✅ Чат ${chatId} обновлен`);
             
         } catch (error) {
             console.error(`❌ Ошибка обновления чата ${chatId}:`, error);
@@ -367,22 +386,19 @@ class ChatSocket {
 
     async ensureChatExists(chatId, senderId) {
         try {
-            // Проверяем существование чата
             const chatResult = await pool.query(
                 'SELECT id FROM chats WHERE id = $1',
                 [chatId]
             );
             
             if (chatResult.rows.length === 0) {
-                // Получаем ID участников
-                const userIds = chatId.split('_');
-                const otherUserId = userIds.find(id => id !== senderId);
+                const participants = this.extractParticipantIds(chatId);
+                const otherUserId = participants.find(id => id !== senderId);
                 
                 if (!otherUserId) {
                     throw new Error(`Cannot find other user in chat: ${chatId}`);
                 }
                 
-                // Получаем имя другого пользователя
                 const userResult = await pool.query(
                     'SELECT display_name FROM users WHERE user_id = $1',
                     [otherUserId]
@@ -392,7 +408,6 @@ class ChatSocket {
                     ? userResult.rows[0].display_name 
                     : `User ${otherUserId.slice(-4)}`;
                 
-                // Создаем чат
                 await pool.query(
                     'INSERT INTO chats (id, name, type, timestamp) VALUES ($1, $2, $3, $4)',
                     [chatId, otherUserName, 'private', Date.now()]
@@ -400,7 +415,6 @@ class ChatSocket {
                 
                 console.log(`✅ Чат создан через WS: ${chatId} (${otherUserName})`);
                 
-                // Уведомляем участников о создании чата
                 this.broadcastToChat(chatId, {
                     type: 'chat_created',
                     chatId,
@@ -415,6 +429,101 @@ class ChatSocket {
         }
     }
 
+    // Ключевой метод: рассылка сообщений в чат
+    broadcastToChat(chatId, data, excludeUserId = null) {
+        try {
+            console.log(`🔥 Рассылка в чат ${chatId}`, {
+                type: data.type,
+                exclude: excludeUserId
+            });
+            
+            // 1. Получаем числовые ID участников
+            const participants = this.extractParticipantIds(chatId);
+            
+            if (participants.length === 0) {
+                console.error(`❌ Не удалось определить участников чата ${chatId}`);
+                return;
+            }
+            
+            console.log(`🔥 Участники чата:`, participants);
+            
+            // 2. Отправляем каждому участнику
+            let sentCount = 0;
+            participants.forEach(userId => {
+                // userId здесь уже числовой
+                if (!excludeUserId || String(userId) !== String(excludeUserId)) {
+                    const success = this.sendToUser(userId, data);
+                    if (success) sentCount++;
+                }
+            });
+            
+            console.log(`📊 В чат ${chatId} отправлено ${sentCount} сообщений из ${participants.length} участников`);
+            
+        } catch (error) {
+            console.error(`❌ Ошибка рассылки в чат ${chatId}:`, error);
+        }
+    }
+
+    // Ключевой метод: отправка конкретному пользователю
+    sendToUser(userId, data) {
+        try {
+            // Преобразуем userId в строку для надежности
+            const userIdStr = String(userId);
+            
+            console.log(`📤 sendToUser:`, {
+                userId: userIdStr,
+                type: data.type,
+                connections: this.userConnections.has(userIdStr) ? this.userConnections.get(userIdStr).size : 0
+            });
+            
+            const userConnections = this.userConnections.get(userIdStr);
+            
+            if (!userConnections || userConnections.size === 0) {
+                console.log(`⚠️ Пользователь ${userIdStr} не имеет активных WebSocket соединений`);
+                return false;
+            }
+            
+            let sentCount = 0;
+            userConnections.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(JSON.stringify(data));
+                        sentCount++;
+                        console.log(`✅ Сообщение отправлено пользователю ${userIdStr}`);
+                    } catch (sendError) {
+                        console.error(`❌ Ошибка отправки пользователю ${userIdStr}:`, sendError);
+                    }
+                } else {
+                    console.log(`⚠️ WebSocket пользователя ${userIdStr} не в состоянии OPEN: ${ws.readyState}`);
+                }
+            });
+            
+            console.log(`📊 Пользователю ${userIdStr} отправлено ${sentCount} из ${userConnections.size} сообщений`);
+            return sentCount > 0;
+            
+        } catch (error) {
+            console.error(`❌ Критическая ошибка sendToUser для ${userId}:`, error);
+            return false;
+        }
+    }
+
+    notifyChatListUpdate(chatId) {
+        try {
+            const participants = this.extractParticipantIds(chatId);
+            
+            participants.forEach(userId => {
+                this.sendToUser(userId, {
+                    type: 'chat_updated',
+                    chatId,
+                    timestamp: Date.now()
+                });
+            });
+            
+        } catch (error) {
+            console.error(`❌ Ошибка уведомления об обновлении чата ${chatId}:`, error);
+        }
+    }
+
     handleTyping(userId, chatId, isTyping) {
         const typingMessage = {
             type: isTyping ? 'user_typing' : 'user_stopped_typing',
@@ -423,19 +532,16 @@ class ChatSocket {
             timestamp: Date.now()
         };
         
-        // Отправляем всем в чате, кроме отправителя
         this.broadcastToChat(chatId, typingMessage, userId);
     }
 
     async handleMessageRead(userId, messageId, chatId) {
         try {
-            // Обновляем статус прочтения в БД
             await pool.query(
                 'UPDATE messages SET read = true WHERE id = $1 AND chat_id = $2',
                 [messageId, chatId]
             );
             
-            // Уведомляем отправителя о прочтении
             const messageResult = await pool.query(
                 'SELECT sender_id FROM messages WHERE id = $1',
                 [messageId]
@@ -444,7 +550,7 @@ class ChatSocket {
             if (messageResult.rows.length > 0) {
                 const senderId = messageResult.rows[0].sender_id;
                 
-                if (senderId !== userId) {
+                if (String(senderId) !== String(userId)) {
                     this.sendToUser(senderId, {
                         type: 'message_read',
                         messageId,
@@ -460,116 +566,10 @@ class ChatSocket {
         }
     }
 
-    broadcastToChat(chatId, data, excludeUserId = null) {
-        try {
-            console.log(`🔥 Рассылка в чат ${chatId}`);
-            
-            // Получаем корректных участников чата
-            const participants = this.getChatParticipants(chatId);
-            
-            if (participants.length === 0) {
-                console.error(`❌ Не удалось определить участников чата ${chatId}`);
-                return;
-            }
-            
-            console.log(`🔥 Участники чата:`, participants);
-            
-            // Отправляем всем участникам, кроме исключенного
-            participants.forEach(userId => {
-                if (!excludeUserId || userId !== excludeUserId) {
-                    console.log(`🔥 Отправка пользователю ${userId}`);
-                    this.sendToUser(userId, data);
-                }
-            });
-            
-        } catch (error) {
-            console.error(`❌ Ошибка рассылки в чат ${chatId}:`, error);
-        }
-    }
-    
-    notifyChatListUpdate(chatId) {
-        try {
-            console.log(`🔥 Уведомление об обновлении чата: ${chatId}`);
-            
-            const participants = this.getChatParticipants(chatId);
-            
-            if (participants.length === 0) {
-                console.error(`❌ Не удалось определить участников для уведомления: ${chatId}`);
-                return;
-            }
-            
-            participants.forEach(userId => {
-                console.log(`🔥 Отправка уведомления пользователю ${userId}`);
-                
-                this.sendToUser(userId, {
-                    type: 'chat_updated',
-                    chatId,
-                    timestamp: Date.now()
-                });
-            });
-            
-        } catch (error) {
-            console.error(`❌ Ошибка уведомления об обновлении чата ${chatId}:`, error);
-        }
-    }
-    
-    notifyChatCreated(chatId, chatName, participants) {
-        try {
-            const message = {
-                type: 'chat_created',
-                chatId,
-                chatName,
-                participants,
-                timestamp: Date.now()
-            };
-            
-            participants.forEach(userId => {
-                this.sendToUser(userId, message);
-            });
-            
-            console.log(`✅ Уведомление о создании чата отправлено: ${chatId}`);
-        } catch (error) {
-            console.error('❌ Ошибка уведомления о создании чата:', error);
-        }
-    }
-    
-    sendToUser(userId, data) {
-        try {
-            console.log(`🔥 Отправка пользователю ${userId}:`, data.type);
-            
-            const userConnections = this.userConnections.get(userId);
-            
-            if (!userConnections || userConnections.size === 0) {
-                console.log(`⚠️ Пользователь ${userId} не имеет активных WebSocket соединений`);
-                return false;
-            }
-            
-            let sentCount = 0;
-            userConnections.forEach(ws => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify(data));
-                    sentCount++;
-                    console.log(`✅ Сообщение отправлено пользователю ${userId}`);
-                } else {
-                    console.log(`⚠️ WebSocket пользователя ${userId} не в состоянии OPEN: ${ws.readyState}`);
-                }
-            });
-            
-            console.log(`📊 Пользователю ${userId} отправлено ${sentCount} сообщений`);
-            return sentCount > 0;
-            
-        } catch (error) {
-            console.error(`❌ Ошибка отправки пользователю ${userId}:`, error);
-            return false;
-        }
-    }
-
     handleDisconnect(userId, ws) {
-        // Удаляем конкретное соединение
         if (this.userConnections.has(userId)) {
             this.userConnections.get(userId).delete(ws);
             
-            // Если больше нет соединений, удаляем пользователя
             if (this.userConnections.get(userId).size === 0) {
                 this.userConnections.delete(userId);
                 this.userChats.delete(userId);
@@ -579,11 +579,31 @@ class ChatSocket {
         console.log(`👋 Пользователь ${userId} отключился`);
     }
 
-    unsubscribeFromAllChats(userId, ws) {
-        // Удаляем пользователя из всех подписок чатов
-        this.chatSubscriptions.forEach((subscribers, chatId) => {
-            subscribers.delete(userId);
+    cleanupDeadConnections() {
+        let cleaned = 0;
+        
+        this.userConnections.forEach((connections, userId) => {
+            const aliveConnections = new Set();
+            
+            connections.forEach(ws => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    aliveConnections.add(ws);
+                } else {
+                    cleaned++;
+                }
+            });
+            
+            if (aliveConnections.size === 0) {
+                this.userConnections.delete(userId);
+                this.userChats.delete(userId);
+            } else {
+                this.userConnections.set(userId, aliveConnections);
+            }
         });
+        
+        if (cleaned > 0) {
+            console.log(`🧹 Очищено ${cleaned} мертвых соединений`);
+        }
     }
 
     sendError(ws, message) {
@@ -599,8 +619,46 @@ class ChatSocket {
             console.error('❌ Ошибка отправки ошибки:', error);
         }
     }
-    
-    // 🔥 Метод для проверки состояния (можно использовать для дебага)
+
+    sendDebugInfo(ws, userId) {
+        const info = {
+            type: 'debug_info',
+            userId,
+            timestamp: Date.now(),
+            stats: {
+                totalUsers: this.userConnections.size,
+                userConnections: Array.from(this.userConnections.entries()).map(([id, conns]) => ({
+                    userId: id,
+                    connectionCount: conns.size
+                })),
+                chatSubscriptions: Array.from(this.chatSubscriptions.entries()).map(([chatId, subs]) => ({
+                    chatId,
+                    subscriberCount: subs.size
+                }))
+            }
+        };
+        
+        ws.send(JSON.stringify(info));
+    }
+
+    logMessageStats(chatId, senderId) {
+        const participants = this.extractParticipantIds(chatId);
+        
+        console.log(`📊 Статистика отправки сообщения:`, {
+            chatId,
+            senderId,
+            participants,
+            senderHasConnections: this.userConnections.has(senderId),
+            receiverIds: participants.filter(id => id !== senderId),
+            receiversConnected: participants
+                .filter(id => id !== senderId)
+                .map(id => ({
+                    userId: id,
+                    connected: this.userConnections.has(id) && this.userConnections.get(id).size > 0
+                }))
+        });
+    }
+
     getStats() {
         return {
             totalUsers: this.userConnections.size,

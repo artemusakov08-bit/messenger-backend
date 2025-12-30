@@ -6,26 +6,28 @@ const setChatSocket = (socketInstance) => {
     chatSocketInstance = socketInstance;
 };
 
-const getChatParticipants = (chatId) => {
+// Универсальный метод извлечения ID участников
+const extractParticipantIds = (chatId) => {
     try {
-        console.log(`🔍 Разбор chatId: ${chatId}`);
-        const parts = chatId.split('_');
-        console.log(`🔍 Части chatId:`, parts);
+        console.log(`🔍 [HTTP] Извлекаем участников из chatId: ${chatId}`);
         
-        if (parts.length < 4) {
-            console.error(`❌ Неверный формат chatId: ${chatId}`);
+        // Формат: "user_123456_user_789012" или "123456_789012"
+        const cleanChatId = chatId.replace(/user_/g, '');
+        const parts = cleanChatId.split('_');
+        
+        if (parts.length < 2) {
+            console.error(`❌ [HTTP] Неверный формат chatId: ${chatId}`);
             return [];
         }
         
-        // parts = ["user", "1766839332356", "user", "1766839575568"]
-        const user1 = parts[0] + '_' + parts[1];  // "user_1766839332356"
-        const user2 = parts[2] + '_' + parts[3];  // "user_1766839575568"
+        const participant1 = parts[0];
+        const participant2 = parts[1];
         
-        console.log(`🔍 Участники чата: ${user1} и ${user2}`);
-        return [user1, user2];
+        console.log(`🔍 [HTTP] Участники: ${participant1}, ${participant2}`);
+        return [participant1, participant2];
         
     } catch (error) {
-        console.error(`❌ Ошибка разбора chatId:`, error);
+        console.error(`❌ [HTTP] Ошибка извлечения участников:`, error);
         return [];
     }
 };
@@ -38,6 +40,14 @@ const sendMessage = async (req, res) => {
         
         const { chatId, text, senderId, senderName, type = 'text' } = req.body;
         
+        console.log(`📤 [HTTP] Отправка сообщения:`, {
+            chatId,
+            senderId,
+            senderName,
+            textLength: text.length,
+            type
+        });
+        
         if (!chatId || !text || !senderId || !senderName) {
             await connection.query('ROLLBACK');
             return res.status(400).json({
@@ -45,61 +55,57 @@ const sendMessage = async (req, res) => {
             });
         }
 
-        console.log(`📤 Отправка сообщения: чат=${chatId}, от=${senderId}`);
+        // 1. Проверяем/создаем чат
+        const chatCheck = await connection.query(
+            'SELECT id FROM chats WHERE id = $1',
+            [chatId]
+        );
 
-    const chatCheck = await connection.query(
-        'SELECT id FROM chats WHERE id = $1',
-        [chatId]
-    );
-
-    if (chatCheck.rows.length === 0) {
-        const participants = getChatParticipants(chatId);
-        
-        let otherUserName = 'Приватный чат';
-        let otherUserId = null;
-        
-        // Находим ID другого пользователя
-        if (participants.length === 2) {
-            otherUserId = participants.find(id => id !== senderId);
+        if (chatCheck.rows.length === 0) {
+            const participants = extractParticipantIds(chatId);
             
-            if (otherUserId) {
-                const userResult = await connection.query(
-                    'SELECT display_name FROM users WHERE user_id = $1',
-                    [otherUserId]
-                );
+            let otherUserName = 'Приватный чат';
+            let otherUserId = null;
+            
+            if (participants.length === 2) {
+                otherUserId = participants.find(id => String(id) !== String(senderId));
                 
-                otherUserName = userResult.rows.length > 0 
-                    ? userResult.rows[0].display_name 
-                    : `User ${otherUserId.substring(otherUserId.length - 4)}`;
+                if (otherUserId) {
+                    const userResult = await connection.query(
+                        'SELECT display_name FROM users WHERE user_id = $1',
+                        [otherUserId]
+                    );
+                    
+                    otherUserName = userResult.rows.length > 0 
+                        ? userResult.rows[0].display_name 
+                        : `User ${String(otherUserId).slice(-4)}`;
+                }
             }
+            
+            await connection.query(
+                `INSERT INTO chats (id, name, type, timestamp, last_message) 
+                VALUES ($1, $2, $3, $4, $5)`,
+                [chatId, otherUserName, 'private', Date.now(), text]
+            );
+            
+            console.log(`✅ [HTTP] Чат создан: ${chatId} (${otherUserName})`);
+            
+        } else {
+            await connection.query(
+                `UPDATE chats 
+                SET timestamp = $1, last_message = $2 
+                WHERE id = $3`,
+                [Date.now(), text, chatId]
+            );
         }
-        
-        await connection.query(
-            `INSERT INTO chats (id, name, type, timestamp, last_message) 
-            VALUES ($1, $2, $3, $4, $5)`,
-            [chatId, otherUserName, 'private', Date.now(), text]
-        );
-        
-        console.log(`✅ Чат создан: ${chatId} (${otherUserName})`);
-        
-    } else {
-        await connection.query(
-            `UPDATE chats 
-            SET timestamp = $1, last_message = $2 
-            WHERE id = $3`,
-            [Date.now(), text, chatId]
-        );
-        
-        console.log(`🔄 Чат обновлен: ${chatId}`);
-    }
 
-        // 2. СОХРАНЯЕМ СООБЩЕНИЕ
+        // 2. Сохраняем сообщение
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
         
         const messageResult = await connection.query(
             `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) 
-             RETURNING id, chat_id, text, sender_id, sender_name, timestamp, type`,
+             RETURNING *`,
             [messageId, chatId, text, senderId, senderName, Date.now(), type]
         );
 
@@ -107,33 +113,47 @@ const sendMessage = async (req, res) => {
         
         await connection.query('COMMIT');
         
-        console.log(`✅ Сообщение сохранено: ${messageId}`);
+        console.log(`✅ [HTTP] Сообщение сохранено: ${messageId}`);
         
-        if (chatSocketInstance && chatSocketInstance.broadcastToChat) {
-            console.log(`📤 Рассылка через WebSocket: ${chatId}`);
-            console.log(`👥 Участники чата:`, getChatParticipants(chatId));
+        // 3. Отправляем через WebSocket
+        if (chatSocketInstance) {
+            console.log(`📤 [HTTP] Рассылка через WebSocket: ${chatId}`);
             
-            chatSocketInstance.broadcastToChat(chatId, {
-                type: 'new_message',
-                chatId: savedMessage.chat_id,
-                message: savedMessage,
-                timestamp: Date.now()
-            });
+            // Проверяем участников
+            const participants = extractParticipantIds(chatId);
+            console.log(`👥 [HTTP] Участники чата:`, participants);
             
+            // Отправляем сообщение через WebSocket
+            if (chatSocketInstance.broadcastToChat) {
+                chatSocketInstance.broadcastToChat(chatId, {
+                    type: 'new_message',
+                    chatId: savedMessage.chat_id,
+                    message: savedMessage,
+                    timestamp: Date.now(),
+                    senderId
+                });
+            }
+            
+            // Уведомляем об обновлении списка чатов
             if (chatSocketInstance.notifyChatListUpdate) {
-                console.log(`📢 Уведомление об обновлении чата: ${chatId}`);
                 chatSocketInstance.notifyChatListUpdate(chatId);
             }
+        } else {
+            console.error('❌ [HTTP] chatSocketInstance не установлен!');
         }
         
-        res.status(201).json(savedMessage);
+        res.status(201).json({
+            ...savedMessage,
+            deliveryStatus: 'sent'
+        });
         
     } catch (error) {
         await connection.query('ROLLBACK');
-        console.error('❌ Ошибка отправки сообщения:', error);
+        console.error('❌ [HTTP] Ошибка отправки сообщения:', error);
         res.status(500).json({ 
             error: 'Internal server error',
-            details: error.message 
+            details: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     } finally {
         connection.release();
@@ -145,7 +165,7 @@ const getChatMessages = async (req, res) => {
         const { chatId } = req.params;
         const { limit = 100, offset = 0, after } = req.query;
         
-        console.log(`📥 Запрос сообщений для чата: ${chatId}`);
+        console.log(`📥 [HTTP] Запрос сообщений для чата: ${chatId}`);
         
         let query = `SELECT * FROM messages WHERE chat_id = $1`;
         const params = [chatId];
@@ -162,11 +182,11 @@ const getChatMessages = async (req, res) => {
         
         const result = await pool.query(query, params);
         
-        console.log(`✅ Получено ${result.rows.length} сообщений для чата ${chatId}`);
+        console.log(`✅ [HTTP] Получено ${result.rows.length} сообщений для чата ${chatId}`);
         res.json(result.rows);
         
     } catch (error) {
-        console.error('❌ Ошибка получения сообщений:', error);
+        console.error('❌ [HTTP] Ошибка получения сообщений:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             details: error.message 
@@ -179,7 +199,7 @@ const getRecentMessages = async (req, res) => {
         const { userId } = req.params;
         const { limit = 20 } = req.query;
         
-        console.log(`📥 Запрос последних сообщений для пользователя: ${userId}`);
+        console.log(`📥 [HTTP] Запрос последних сообщений для: ${userId}`);
         
         const result = await pool.query(
             `SELECT DISTINCT ON (m.chat_id) m.* 
@@ -190,11 +210,11 @@ const getRecentMessages = async (req, res) => {
             [`%${userId}%`, `${userId}_%`, `%_${userId}`, parseInt(limit)]
         );
         
-        console.log(`✅ Получено ${result.rows.length} последних сообщений для ${userId}`);
+        console.log(`✅ [HTTP] Получено ${result.rows.length} сообщений для ${userId}`);
         res.json(result.rows);
         
     } catch (error) {
-        console.error('❌ Ошибка получения последних сообщений:', error);
+        console.error('❌ [HTTP] Ошибка получения последних сообщений:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             details: error.message 
@@ -207,7 +227,7 @@ const deleteMessage = async (req, res) => {
         const { messageId } = req.params;
         const { userId } = req.body;
         
-        console.log(`🗑️ Удаление сообщения: ${messageId} пользователем ${userId}`);
+        console.log(`🗑️ [HTTP] Удаление сообщения: ${messageId} пользователем ${userId}`);
         
         const messageCheck = await pool.query(
             'SELECT sender_id, chat_id FROM messages WHERE id = $1',
@@ -220,7 +240,7 @@ const deleteMessage = async (req, res) => {
         
         const message = messageCheck.rows[0];
         
-        if (message.sender_id !== userId) {
+        if (String(message.sender_id) !== String(userId)) {
             return res.status(403).json({ error: 'You can only delete your own messages' });
         }
         
@@ -240,7 +260,7 @@ const deleteMessage = async (req, res) => {
             });
         }
         
-        console.log(`✅ Сообщение удалено: ${messageId}`);
+        console.log(`✅ [HTTP] Сообщение удалено: ${messageId}`);
         res.json({ 
             success: true, 
             message: 'Message deleted',
@@ -248,7 +268,7 @@ const deleteMessage = async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Ошибка удаления сообщения:', error);
+        console.error('❌ [HTTP] Ошибка удаления сообщения:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             details: error.message 
@@ -261,5 +281,6 @@ module.exports = {
     getChatMessages,
     getRecentMessages,
     deleteMessage,
-    setChatSocket
+    setChatSocket,
+    extractParticipantIds
 };
