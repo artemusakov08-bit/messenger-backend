@@ -11,6 +11,7 @@ const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
 const http = require('http');
 const authController = require('./src/controllers/authController');
+const moderationRoutes = require('./src/routes/moderation');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
@@ -64,6 +65,7 @@ app.use('/api/call', callRoutes);
 app.use('/api/message', messageRoutes);
 const usernameRoutes = require('./src/routes/username');
 app.use('/api/username', usernameRoutes);
+app.use('/api/moderation', moderationRoutes);
 
 const authMiddleware = require('./src/middleware/authMiddleware');
 
