@@ -1010,6 +1010,33 @@ app.get('/api/moderation/templates', async (req, res) => {
     }
 });
 
+app.get('/api/chat/my-chats', authMiddleware.authenticate, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        
+        const result = await pool.query(
+            `SELECT c.*, 
+                    (SELECT text FROM messages 
+                     WHERE chat_id = c.id 
+                     ORDER BY timestamp DESC 
+                     LIMIT 1) as last_message,
+                    (SELECT timestamp FROM messages 
+                     WHERE chat_id = c.id 
+                     ORDER BY timestamp DESC 
+                     LIMIT 1) as last_message_time
+             FROM chats c
+             WHERE c.id LIKE $1 OR c.id LIKE $2 OR c.id LIKE $3
+             ORDER BY last_message_time DESC NULLS LAST`,
+            [`%${userId}%`, `user_${userId}_%`, `%_user_${userId}`]
+        );
+        
+        res.json(result.rows);
+    } catch (error) {
+        console.error('❌ Error loading chats:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
     console.log('🎯 ОБРАБОТЧИК ПОИСКА ВЫЗВАН!');
