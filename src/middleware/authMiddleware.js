@@ -5,11 +5,6 @@ const RolePermissionService = require('../services/auth/RolePermissionService');
 const authMiddleware = {
 authenticate: async (req, res, next) => {
     try {
-        // 🔥 ЛОГИРОВАНИЕ ВХОДЯЩЕГО ЗАПРОСА
-        console.log('🔐 === НАЧАЛО АУТЕНТИФИКАЦИИ ===');
-        console.log('🔐 URL:', req.originalUrl);
-        console.log('🔐 Метод:', req.method);
-        
         // 🔥 ПРАВИЛЬНОЕ ПОЛУЧЕНИЕ ТОКЕНА
         const authHeader = req.headers['authorization'] || req.headers['Authorization'];
         
@@ -27,14 +22,9 @@ authenticate: async (req, res, next) => {
         let token;
         if (authHeader.startsWith('Bearer ')) {
             token = authHeader.substring(7);
-            console.log('🔐 Токен извлечен (с Bearer)');
         } else {
             token = authHeader;
-            console.log('🔐 Токен извлечен (без Bearer)');
         }
-        
-        console.log('🔐 Длина токена:', token.length);
-        console.log('🔐 Токен (первые 30 символов):', token.substring(0, Math.min(30, token.length)) + '...');
         
         // 🔥 ПРОВЕРКА JWT_SECRET
         if (!process.env.JWT_SECRET) {
@@ -51,7 +41,6 @@ authenticate: async (req, res, next) => {
         
         // 🔥 ВЕРИФИКАЦИЯ ТОКЕНА
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        console.log('✅ Токен верифицирован:', decoded);
         
         // 🔥 ПОЛУЧЕНИЕ ПОЛЬЗОВАТЕЛЯ ИЗ БАЗЫ
         const userResult = await pool.query(
@@ -72,7 +61,6 @@ authenticate: async (req, res, next) => {
         req.userId = user.user_id;
         
         console.log('✅ Аутентификация успешна. Пользователь:', user.user_id, '-', user.display_name);
-        console.log('🔐 === КОНЕЦ АУТЕНТИФИКАЦИИ ===\n');
         
         next();
         
