@@ -670,41 +670,46 @@ io.on('connection', (socket) => {
         console.log('✅ Чат обновлен:', chatId);
       }
 
-      const messageToSend = {
-        id: messageId,
-        chat_id: chatId,
-        text: text,
-        sender_id: senderId,
-        sender_name: senderName,
-        type: type,
-        timestamp: timestamp,
-        status: 'DELIVERED'
+  const messageToSend = {
+          id: messageId,
+          chat_id: chatId,
+          text: text,
+          sender_id: senderId,
+          sender_name: senderName,
+          type: type,
+          timestamp: timestamp,
+          status: 'DELIVERED'
       };
-      
-      const receiverRawId = senderId === user1 ? user2 : user1;
-      const receiverCleanId = receiverRawId.replace('user_', '');
+
+      // 🔥 1. ОТПРАВЛЯЕМ В КОМНАТУ ЧАТА
+      socket.to(chatId).emit('new_message', messageToSend);
+
+      // 🔥 2. ОТПРАВЛЯЕМ ПОЛУЧАТЕЛЮ НАПРЯМУЮ
+      const receiverId = senderId === user1 ? user2 : user1;
+      const receiverCleanId = receiverId.replace('user_', '');
       const receiverSocketId = connectedUsers.get(receiverCleanId);
-      
+
       if (receiverSocketId) {
           io.to(receiverSocketId).emit('new_message', messageToSend);
-          console.log(`✅ Отправлено ${receiverRawId}`); // Исправлено
+          console.log(`✅ Отправлено ${receiverId}`);
       } else {
-          console.log(`⚠️ ${receiverRawId} оффлайн`); // Исправлено
+          console.log(`⚠️ ${receiverId} оффлайн`);
           
           // Сохраняем уведомление
           await pool.query(
               `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              ['notif_' + Date.now(), receiverCleanId, 'new_message', // Исправлено
+              ['notif_' + Date.now(), receiverCleanId, 'new_message',
               'Новое сообщение', `${senderName}: ${text}`, 
               JSON.stringify({ chatId, messageId }), timestamp]
           );
       }
-      
+
+      // 🔥 3. ПОДТВЕРЖДЕНИЕ ОТПРАВИТЕЛЮ
       socket.emit('message_sent', {
-        messageId: messageId,
-        chatId: chatId,
-        status: 'SENT'
+          messageId: messageId,
+          chatId: chatId,
+          status: 'SENT'
       });
 
     } catch (error) {
