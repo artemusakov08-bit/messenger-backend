@@ -680,25 +680,25 @@ io.on('connection', (socket) => {
         timestamp: timestamp,
         status: 'DELIVERED'
       };
-      io.to(chatId).emit('new_message', messageToSend);
       
-      const cleanId = (id) => id.replace('user_', '');
-      const receiverCleanId = cleanId(senderId === user1 ? user2 : user1);
+      const receiverRawId = senderId === user1 ? user2 : user1;
+      const receiverCleanId = receiverRawId.replace('user_', '');
       const receiverSocketId = connectedUsers.get(receiverCleanId);
       
       if (receiverSocketId) {
-        io.to(receiverSocketId).emit('new_message', messageToSend);
-        console.log(`✅ Отправлено ${receiverId}`);
+          io.to(receiverSocketId).emit('new_message', messageToSend);
+          console.log(`✅ Отправлено ${receiverRawId}`); // Исправлено
       } else {
-        console.log(`⚠️ ${receiverId} оффлайн`);
-        
-        await pool.query(
-          `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          ['notif_' + Date.now(), receiverId, 'new_message', 
-          'Новое сообщение', `${senderName}: ${text}`, 
-          JSON.stringify({ chatId, messageId }), timestamp]
-        );
+          console.log(`⚠️ ${receiverRawId} оффлайн`); // Исправлено
+          
+          // Сохраняем уведомление
+          await pool.query(
+              `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              ['notif_' + Date.now(), receiverCleanId, 'new_message', // Исправлено
+              'Новое сообщение', `${senderName}: ${text}`, 
+              JSON.stringify({ chatId, messageId }), timestamp]
+          );
       }
       
       socket.emit('message_sent', {
