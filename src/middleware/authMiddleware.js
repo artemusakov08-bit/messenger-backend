@@ -16,7 +16,6 @@ authenticate: async (req, res, next) => {
             });
         }
         
-        console.log('🔐 Полный заголовок Authorization:', authHeader);
         
         // 🔥 ИЗВЛЕЧЕНИЕ ТОКЕНА (поддерживаем Bearer и без него)
         let token;
@@ -35,10 +34,6 @@ authenticate: async (req, res, next) => {
                 error: 'Ошибка конфигурации сервера' 
             });
         }
-        
-        console.log('🔐 JWT_SECRET установлен (первые 5 символов):', 
-            process.env.JWT_SECRET.substring(0, Math.min(5, process.env.JWT_SECRET.length)) + '...');
-        
         // 🔥 ВЕРИФИКАЦИЯ ТОКЕНА
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
