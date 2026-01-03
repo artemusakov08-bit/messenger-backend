@@ -680,14 +680,11 @@ io.on('connection', (socket) => {
         timestamp: timestamp,
         status: 'DELIVERED'
       };
-      
-      // 🔥 ОТПРАВЛЯЕМ СООБЩЕНИЕ
-      // 1. В комнату чата
       io.to(chatId).emit('new_message', messageToSend);
       
-      // 2. Находим получателя и отправляем напрямую
-      const receiverId = senderId === user1 ? user2 : user1;
-      const receiverSocketId = connectedUsers.get(receiverId);
+      const cleanId = (id) => id.replace('user_', '');
+      const receiverCleanId = cleanId(senderId === user1 ? user2 : user1);
+      const receiverSocketId = connectedUsers.get(receiverCleanId);
       
       if (receiverSocketId) {
         io.to(receiverSocketId).emit('new_message', messageToSend);
@@ -695,7 +692,6 @@ io.on('connection', (socket) => {
       } else {
         console.log(`⚠️ ${receiverId} оффлайн`);
         
-        // Сохраняем уведомление
         await pool.query(
           `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -705,7 +701,6 @@ io.on('connection', (socket) => {
         );
       }
       
-      // 3. Подтверждение отправителю
       socket.emit('message_sent', {
         messageId: messageId,
         chatId: chatId,
