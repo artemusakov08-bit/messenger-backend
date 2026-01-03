@@ -1,4 +1,3 @@
-server.js
 require('dotenv').config({ path: '.env' });
 
 console.log('🚀 ===== ЗАПУСК СЕРВЕРА =====');
