@@ -577,20 +577,18 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Регистрация пользователя
   socket.on('user_connected', (userId) => {
-    socket.userId = userId; 
-    connectedUsers.set(userId, socket.id);
-    console.log(`👤 Пользователь ${userId} подключен (socket: ${socket.id})`);
-    
-    // Обновляем статус в базе
-    pool.query(
-      'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-      ['online', Date.now(), userId]
-    ).catch(err => console.error('❌ Error updating user status:', err));
-    
-    // Уведомляем всех о новом онлайн пользователе
-    socket.broadcast.emit('user_online', userId);
+      // Храним с префиксом user_
+      const fullUserId = `user_${userId}`;
+      connectedUsers.set(fullUserId, socket.id);
+      socket.userId = fullUserId;
+      
+      console.log(`👤 Пользователь ${fullUserId} подключен`);
+      
+      pool.query(
+          'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+          ['online', Date.now(), userId]
+      );
   });
 
   // Отправка сообщения через WebSocket
@@ -686,8 +684,7 @@ io.on('connection', (socket) => {
 
       // 🔥 2. ОТПРАВЛЯЕМ ПОЛУЧАТЕЛЮ НАПРЯМУЮ
       const receiverId = senderId === user1 ? user2 : user1;
-      const receiverCleanId = receiverId.replace('user_', '');
-      const receiverSocketId = connectedUsers.get(receiverCleanId);
+      const receiverSocketId = connectedUsers.get(receiverId); // Ищем с префиксом
 
       if (receiverSocketId) {
           io.to(receiverSocketId).emit('new_message', messageToSend);
@@ -695,7 +692,8 @@ io.on('connection', (socket) => {
       } else {
           console.log(`⚠️ ${receiverId} оффлайн`);
           
-          // Сохраняем уведомление
+          // Для уведомления используем чистый ID (без user_)
+          const receiverCleanId = receiverId.replace('user_', '');
           await pool.query(
               `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -815,6 +813,39 @@ app.get('/api/users', async (req, res) => {
       error: 'Database error: ' + error.message
     });
   }
+});
+
+// Эндпоинт статуса пользователя
+app.get('/api/users/:userId/status', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        
+        // Проверяем в connectedUsers
+        const isOnline = connectedUsers.has(`user_${userId}`);
+        
+        // Получаем из базы
+        const result = await pool.query(
+            'SELECT last_seen FROM users WHERE user_id = $1',
+            [userId]
+        );
+        
+        let status = 'offline';
+        if (isOnline) {
+            status = 'online';
+        } else if (result.rows.length > 0) {
+            const lastSeen = result.rows[0].last_seen;
+            const diff = Date.now() - (lastSeen || 0);
+            
+            if (diff < 300000) { // 5 минут
+                status = 'recently';
+            }
+        }
+        
+        res.json({ userId, status, isOnline });
+        
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // 🔧 ЭНДПОИНТ ДЛЯ ПОИСКА ПОЛЬЗОВАТЕЛЯ ПО ТЕЛЕФОНУ
