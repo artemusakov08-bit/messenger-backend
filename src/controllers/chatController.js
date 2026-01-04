@@ -43,7 +43,7 @@ class ChatController {
                     id: chatId,
                     name: 'Приватный чат',
                     type: 'private',
-                    timestamp: row.last_message_time || Date.now(),
+                    timestamp: row.last_message_time ? Number(row.last_message_time) : Date.now(),
                     last_message: row.last_message_text || '',
                     member_count: 2
                 };
@@ -53,7 +53,7 @@ class ChatController {
                     const dbChat = chatResult.rows[0];
                     chatData.name = dbChat.name || chatData.name;
                     chatData.type = dbChat.type || chatData.type;
-                    chatData.timestamp = dbChat.timestamp || chatData.timestamp;
+                    chatData.timestamp = dbChat.timestamp ? Number(dbChat.timestamp) : chatData.timestamp;
                     chatData.last_message = dbChat.last_message || chatData.last_message;
                 } else {
                     // 🔥 ВАЖНО: Если чата нет в таблице chats, но есть сообщения - создаем его
@@ -111,7 +111,7 @@ class ChatController {
                     id: chat.id,
                     name: chat.name || 'Приватный чат',
                     type: chat.type || 'private',
-                    timestamp: chat.timestamp || Date.now(),
+                    timestamp: chat.timestamp ? Number(chat.timestamp) : Date.now(),
                     last_message: chat.last_message || '',
                     member_count: 2
                 });
@@ -129,7 +129,7 @@ class ChatController {
             // 🔥 5. Детальный лог для отладки
             console.log('📊 Список чатов:');
             allChats.forEach((chat, i) => {
-                const time = chat.timestamp ? new Date(chat.timestamp).toISOString() : 'no time';
+                const time = chat.timestamp && !isNaN(Number(chat.timestamp)) ? new Date(Number(chat.timestamp)).toISOString() : 'no time';
                 console.log(`${i+1}. ${chat.id} - "${chat.name}" - time: ${time} - last: "${chat.last_message?.substring(0, 30)}"`);
             });
             
