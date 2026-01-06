@@ -11,6 +11,8 @@ const { Server } = require('socket.io');
 const http = require('http');
 const authController = require('./src/controllers/authController');
 const moderationRoutes = require('./src/routes/moderation');
+const { initializeNotificationSocket } = require('./src/sockets/notificationSocket');
+const NotificationService = require('./src/services/NotificationService');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
@@ -19,14 +21,68 @@ const chatRoutes = require('./src/routes/chat');
 const callRoutes = require('./src/routes/call');
 const messageRoutes = require('./src/routes/message');
 
+const sessionRoutes = require('./src/routes/session');
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  pingInterval: 30000,
+  pingTimeout: 5000,
+  maxHttpBufferSize: 1e6 // 1MB
 });
+
+// Инициализируем сервис уведомлений
+const notificationService = new NotificationService(io);
+
+// В обработчике WebSocket соединения:
+io.on('connection', (socket) => {
+  console.log('🔗 Пользователь подключился:', socket.id);
+
+  // Регистрация устройства для уведомлений
+  socket.on('register:device', (data) => {
+    const { userId, deviceId } = data;
+    if (userId && deviceId) {
+      notificationService.registerDevice(userId, deviceId, socket.id);
+      
+      // Отправляем подтверждение
+      socket.emit('device:registered', {
+        success: true,
+        deviceId,
+        timestamp: new Date().toISOString()
+      });
+    }
+  });
+
+  // Получение онлайн устройств
+  socket.on('get:online:devices', (data) => {
+    const { userId } = data;
+    const onlineDevices = notificationService.getOnlineDevices(userId);
+    
+    socket.emit('online:devices', {
+      userId,
+      devices: onlineDevices,
+      count: onlineDevices.length
+    });
+  });
+
+  // Проверка связи
+  socket.on('ping', () => {
+    socket.emit('pong', { timestamp: Date.now() });
+  });
+
+  // Отключение
+  socket.on('disconnect', () => {
+    // Находим и удаляем устройство (нужно хранить mapping socketId -> {userId, deviceId})
+    console.log('🔗 Пользователь отключился:', socket.id);
+  });
+});
+
+// Экспортируем для использования в других модулях
+module.exports = { io, notificationService };
 
 const port = process.env.PORT || 10000;
 
@@ -65,13 +121,15 @@ app.use('/api/message', messageRoutes);
 const usernameRoutes = require('./src/routes/username');
 app.use('/api/username', usernameRoutes);
 app.use('/api/moderation', moderationRoutes);
+app.use('/api/session', sessionRoutes); 
 
 const authMiddleware = require('./src/middleware/authMiddleware');
 
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
-app.use('/api/chat', authMiddleware.authenticate, chatRoutes);  
-app.use('/api/call', authMiddleware.authenticate, callRoutes);
-app.use('/api/message', authMiddleware.authenticate, messageRoutes);
+const sessionMiddleware = require('./src/middleware/sessionMiddleware');
+app.use('/api/chat', sessionMiddleware.authenticate, chatRoutes);
+app.use('/api/call', sessionMiddleware.authenticate, callRoutes);
+app.use('/api/message', sessionMiddleware.authenticate, messageRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({
@@ -155,6 +213,40 @@ async function initializeDatabase() {
           console.log(`⚠️  Колонка уже существует: ${column.split(' ')[0]}`);
       }
   }
+
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id VARCHAR(50) NOT NULL,
+        device_id VARCHAR(255) NOT NULL,
+        device_name VARCHAR(100) NOT NULL DEFAULT 'Unknown Device',
+        os VARCHAR(50) NOT NULL DEFAULT 'Unknown',
+        device_info JSONB DEFAULT '{}',
+        session_token VARCHAR(500) NOT NULL,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        access_token_expires_at TIMESTAMP NOT NULL,
+        refresh_token_expires_at TIMESTAMP NOT NULL,
+        ip_address VARCHAR(45),
+        location JSONB,
+        last_active_at TIMESTAMP DEFAULT NOW(),
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW(),
+        
+        UNIQUE(device_id, user_id, is_active),
+        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+      )
+    `);
+
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_device_id ON sessions(device_id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_session_token ON sessions(session_token);
+      CREATE INDEX IF NOT EXISTS idx_sessions_refresh_token ON sessions(refresh_token);
+      CREATE INDEX IF NOT EXISTS idx_sessions_access_token ON sessions(access_token);
+      CREATE INDEX IF NOT EXISTS idx_sessions_is_active ON sessions(is_active);
+      CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(refresh_token_expires_at);
+    `);
 
     await db.query(`
       CREATE TABLE IF NOT EXISTS user_security (

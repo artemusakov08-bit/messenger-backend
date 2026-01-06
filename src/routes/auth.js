@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const deviceAuthMiddleware = require('../middleware/deviceAuthMiddleware');
 
 // 🔍 Проверка регистрации пользователя
 router.post('/check-registration', (req, res) => {
@@ -40,6 +41,36 @@ router.get('/user/:userId', (req, res) => {
 // 🆕 Регистрация пользователя
 router.post('/register', (req, res) => {
     authController.register(req, res);
+});
+
+// 🆕 Создание сессии устройства (после успешного входа)
+router.post('/create-session', (req, res) => {
+    authController.createDeviceSession(req, res);
+});
+
+// 🔄 Обновление токенов
+router.post('/refresh-token', (req, res) => {
+    authController.refreshToken(req, res);
+});
+
+// 📋 Получение активных сессий (требует авторизацию)
+router.get('/sessions', deviceAuthMiddleware, (req, res) => {
+    authController.getSessions(req, res);
+});
+
+// 🚪 Выход из текущей сессии
+router.post('/logout', deviceAuthMiddleware, (req, res) => {
+    authController.logout(req, res);
+});
+
+// 🚫 Завершение конкретной сессии
+router.delete('/sessions/:sessionId', deviceAuthMiddleware, (req, res) => {
+    authController.endSession(req, res);
+});
+
+// 🚫 Завершение всех других сессий
+router.delete('/sessions', deviceAuthMiddleware, (req, res) => {
+    authController.endAllSessions(req, res);
 });
 
 module.exports = router;

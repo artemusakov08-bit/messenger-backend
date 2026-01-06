@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
 const { UserSecurity, VerificationCode } = require('../models');
+const DeviceSession = require('../models/DeviceSession');
+const jwtUtils = require('../utils/jwtUtils');
 
 console.log('🔑 === ПРОВЕРКА JWT_SECRET ===');
 console.log('🔑 JWT_SECRET в process.env:', process.env.JWT_SECRET ? 'ЕСТЬ' : 'НЕТ');
@@ -115,6 +117,309 @@ class AuthController {
             });
         } finally {
             client.release();
+        }
+    }
+
+    // 🆕 СОЗДАНИЕ СЕССИИ УСТРОЙСТВА
+    async createDeviceSession(req, res) {
+        const client = await db.getClient();
+        try {
+            const { userId, deviceId, deviceInfo = {} } = req.body;
+            
+            if (!userId || !deviceId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'ID пользователя и устройства обязательны'
+                });
+            }
+
+            // Проверяем существование пользователя
+            const userResult = await client.query(
+                'SELECT * FROM users WHERE user_id = $1',
+                [userId]
+            );
+            
+            if (userResult.rows.length === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Пользователь не найден'
+                });
+            }
+
+            // Генерируем пару токенов
+            const tokenPair = jwtUtils.generateTokenPair(userId, deviceId);
+            
+            // Вычисляем даты истечения
+            const now = new Date();
+            const accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000); // +1 час
+            const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000); // +30 дней
+
+            // Создаем или обновляем сессию
+            const [session, created] = await DeviceSession.findOrCreate({
+                where: { userId, deviceId },
+                defaults: {
+                    deviceName: deviceInfo.deviceName || 'Android Device',
+                    deviceInfo,
+                    accessToken: tokenPair.accessToken,
+                    refreshToken: tokenPair.refreshToken,
+                    accessTokenExpiresAt,
+                    refreshTokenExpiresAt,
+                    ipAddress: req.ip,
+                    isActive: true
+                }
+            });
+
+            if (!created) {
+                // Обновляем существующую сессию
+                session.accessToken = tokenPair.accessToken;
+                session.refreshToken = tokenPair.refreshToken;
+                session.accessTokenExpiresAt = accessTokenExpiresAt;
+                session.refreshTokenExpiresAt = refreshTokenExpiresAt;
+                session.deviceInfo = deviceInfo;
+                session.ipAddress = req.ip;
+                session.isActive = true;
+                session.lastActiveAt = now;
+                await session.save();
+            }
+
+            console.log(`✅ ${created ? 'Создана' : 'Обновлена'} сессия для устройства:`, deviceId);
+
+            res.json({
+                success: true,
+                session: {
+                    id: session.id,
+                    deviceId: session.deviceId,
+                    deviceName: session.deviceName,
+                    createdAt: session.createdAt
+                },
+                tokens: {
+                    accessToken: tokenPair.accessToken,
+                    refreshToken: tokenPair.refreshToken,
+                    accessTokenExpiresIn: tokenPair.accessTokenExpiresIn,
+                    refreshTokenExpiresIn: tokenPair.refreshTokenExpiresIn,
+                    accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
+                    refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString()
+                },
+                user: {
+                    id: userResult.rows[0].user_id,
+                    username: userResult.rows[0].username,
+                    displayName: userResult.rows[0].display_name
+                }
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка создания сессии:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка создания сессии: ' + error.message
+            });
+        } finally {
+            client.release();
+        }
+    }
+
+    // 🔄 ОБНОВЛЕНИЕ ACCESS TOKEN
+    async refreshToken(req, res) {
+        try {
+            const { refreshToken } = req.body;
+            
+            if (!refreshToken) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Refresh token обязателен'
+                });
+            }
+
+            // Валидация refresh токена
+            const tokenResult = jwtUtils.verifyRefreshToken(refreshToken);
+            
+            if (!tokenResult.valid) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Неверный refresh token'
+                });
+            }
+
+            const { userId, deviceId } = tokenResult.decoded;
+            
+            // Ищем активную сессию
+            const session = await DeviceSession.findByRefreshToken(refreshToken);
+            
+            if (!session) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Сессия не найдена или неактивна'
+                });
+            }
+
+            // Генерируем новую пару токенов
+            const tokenPair = jwtUtils.generateTokenPair(userId, deviceId);
+            
+            // Обновляем токены в сессии
+            const now = new Date();
+            session.accessToken = tokenPair.accessToken;
+            session.refreshToken = tokenPair.refreshToken;
+            session.accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000);
+            session.refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
+            session.lastActiveAt = now;
+            await session.save();
+
+            console.log(`✅ Токены обновлены для устройства:`, deviceId);
+
+            res.json({
+                success: true,
+                accessToken: tokenPair.accessToken,
+                refreshToken: tokenPair.refreshToken,
+                accessTokenExpiresIn: tokenPair.accessTokenExpiresIn,
+                refreshTokenExpiresIn: tokenPair.refreshTokenExpiresIn,
+                accessTokenExpiresAt: session.accessTokenExpiresAt.toISOString()
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка обновления токена:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка обновления токена: ' + error.message
+            });
+        }
+    }
+
+    // 📋 ПОЛУЧЕНИЕ АКТИВНЫХ СЕССИЙ ПОЛЬЗОВАТЕЛЯ
+    async getSessions(req, res) {
+        try {
+            const { userId } = req;
+            
+            const sessions = await DeviceSession.getUserSessions(userId);
+            
+            const formattedSessions = sessions.map(session => ({
+                id: session.id,
+                deviceId: session.deviceId,
+                deviceName: session.deviceName,
+                deviceInfo: session.deviceInfo,
+                ipAddress: session.ipAddress,
+                location: session.location,
+                createdAt: session.createdAt,
+                lastActiveAt: session.lastActiveAt,
+                isCurrent: session.deviceId === req.deviceId,
+                isActive: session.isActive
+            }));
+
+            res.json({
+                success: true,
+                sessions: formattedSessions,
+                count: sessions.length
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка получения сессий:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка получения сессий: ' + error.message
+            });
+        }
+    }
+
+    // 🚪 ЗАВЕРШЕНИЕ КОНКРЕТНОЙ СЕССИИ
+    async endSession(req, res) {
+        try {
+            const { userId } = req;
+            const { sessionId } = req.params;
+            
+            const session = await DeviceSession.findOne({
+                where: {
+                    id: sessionId,
+                    userId
+                }
+            });
+            
+            if (!session) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Сессия не найдена'
+                });
+            }
+
+            // Нельзя завершить текущую сессию через этот метод
+            if (session.deviceId === req.deviceId) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Для завершения текущей сессии используйте logout'
+                });
+            }
+
+            await session.deactivate();
+            
+            res.json({
+                success: true,
+                message: 'Сессия завершена',
+                sessionId: session.id
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка завершения сессии:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка завершения сессии: ' + error.message
+            });
+        }
+    }
+
+    // 🚫 ЗАВЕРШЕНИЕ ВСЕХ СЕССИЙ (кроме текущей)
+    async endAllSessions(req, res) {
+        const client = await db.getClient();
+        try {
+            const { userId, deviceId } = req;
+            
+            await DeviceSession.update(
+                { isActive: false },
+                {
+                    where: {
+                        userId,
+                        deviceId: { [Op.ne]: deviceId } // Все кроме текущей
+                    }
+                }
+            );
+            
+            res.json({
+                success: true,
+                message: 'Все другие сессии завершены'
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка завершения всех сессий:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка завершения сессий: ' + error.message
+            });
+        } finally {
+            client.release();
+        }
+    }
+
+    // 🚪 ВЫХОД (завершение текущей сессии)
+    async logout(req, res) {
+        try {
+            const { userId, deviceId } = req;
+            
+            const session = await DeviceSession.findOne({
+                where: { userId, deviceId, isActive: true }
+            });
+            
+            if (session) {
+                await session.deactivate();
+            }
+            
+            res.json({
+                success: true,
+                message: 'Вы вышли из системы'
+            });
+
+        } catch (error) {
+            console.error('❌ Ошибка выхода:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Ошибка выхода: ' + error.message
+            });
         }
     }
 
