@@ -9,7 +9,7 @@ class TokenService {
 
   // 🔐 Генерация пары токенов
   generateTokenPair(userId, deviceId, deviceName = 'Unknown Device') {
-    // Session Token (30-90 дней)
+    // Session Token (уникальный идентификатор сессии)
     const sessionToken = this.generateSessionToken(userId, deviceId);
     
     // Access Token (1 час)
@@ -17,6 +17,7 @@ class TokenService {
       { 
         userId, 
         deviceId,
+        deviceName,
         type: 'access',
         sessionId: this.hashToken(sessionToken)
       },
@@ -40,8 +41,8 @@ class TokenService {
       sessionToken,
       accessToken,
       refreshToken,
-      accessTokenExpiresIn: 3600, // 1 час в секундах
-      refreshTokenExpiresIn: 2592000 // 30 дней в секундах
+      accessTokenExpiresIn: 3600,
+      refreshTokenExpiresIn: 2592000
     };
   }
 
@@ -80,19 +81,33 @@ class TokenService {
     }
   }
 
-  // 🔒 Хеширование токена для безопасного хранения
+  // 🔒 Хеширование токена
   hashToken(token) {
     return crypto.createHash('sha256').update(token).digest('hex');
   }
 
-  // 📋 Получить данные из токена без валидации
+  // 📋 Декодирование токена
   decodeToken(token) {
     return jwt.decode(token);
   }
 
-  // 🔐 Генерация короткого кода для SMS
+  // 🔐 Генерация SMS кода
   generateSMSCode() {
     return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  // 🔐 Генерация operation token (для 2FA)
+  generateOperationToken(userId, operation, expiresIn = '5m') {
+    return jwt.sign(
+      { 
+        userId, 
+        type: 'operation',
+        operation,
+        iat: Math.floor(Date.now() / 1000)
+      },
+      this.JWT_SECRET,
+      { expiresIn }
+    );
   }
 }
 

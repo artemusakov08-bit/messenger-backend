@@ -1,9 +1,9 @@
 const sessionService = require('../services/sessionService');
 const db = require('../config/database');
 
-const sessionMiddleware = {
-  // 🔐 Аутентификация по access token
-  authenticate: async (req, res, next) => {
+class SessionMiddleware {
+  // 🔐 Аутентификация
+  async authenticate(req, res, next) {
     try {
       const authHeader = req.headers.authorization;
       
@@ -16,7 +16,7 @@ const sessionMiddleware = {
       
       const accessToken = authHeader.split(' ')[1];
       
-      // Валидируем access token через сервис сессий
+      // Валидируем токен
       const validationResult = await sessionService.validateAccessToken(
         accessToken,
         req.ip
@@ -30,7 +30,7 @@ const sessionMiddleware = {
         });
       }
       
-      // Получаем данные пользователя из базы
+      // Получаем данные пользователя
       const client = await db.getClient();
       try {
         const userResult = await client.query(
@@ -47,7 +47,7 @@ const sessionMiddleware = {
         
         const user = userResult.rows[0];
         
-        // Добавляем данные в req.user
+        // Добавляем в запрос
         req.user = {
           userId: user.user_id,
           username: user.username,
@@ -72,44 +72,10 @@ const sessionMiddleware = {
         error: 'Ошибка аутентификации'
       });
     }
-  },
-
-  // 🔄 Проверка refresh token
-  validateRefreshToken: async (req, res, next) => {
-    try {
-      const { refreshToken } = req.body;
-      
-      if (!refreshToken) {
-        return res.status(400).json({
-          success: false,
-          error: 'Refresh token обязателен'
-        });
-      }
-      
-      // Проверяем refresh token через сервис
-      const tokenResult = await sessionService.validateRefreshToken(refreshToken);
-      
-      if (!tokenResult.valid) {
-        return res.status(401).json({
-          success: false,
-          error: 'Неверный refresh token'
-        });
-      }
-      
-      req.refreshTokenData = tokenResult.decoded;
-      next();
-      
-    } catch (error) {
-      console.error('❌ Ошибка валидации refresh token:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Ошибка валидации токена'
-      });
-    }
-  },
+  }
 
   // 👮 Проверка роли
-  requireRole: (roles) => {
+  requireRole(roles) {
     return (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({
@@ -127,24 +93,30 @@ const sessionMiddleware = {
       
       next();
     };
-  },
+  }
 
-  // 📱 Привязка к устройству (дополнительная проверка)
-  requireDevice: async (req, res, next) => {
+  // 📱 Привязка к устройству
+  async requireDevice(req, res, next) {
     try {
       const { userId, deviceId } = req.user;
       const requestedDeviceId = req.params.deviceId || req.body.deviceId;
       
       if (requestedDeviceId && requestedDeviceId !== deviceId) {
-        // Проверяем, есть ли у пользователя такая сессия
-        const sessions = await sessionService.getUserSessions(userId);
-        const hasSession = sessions.some(s => s.deviceId === requestedDeviceId);
-        
-        if (!hasSession) {
-          return res.status(403).json({
-            success: false,
-            error: 'Доступ с этого устройства запрещен'
-          });
+        const client = await db.getClient();
+        try {
+          const result = await client.query(
+            'SELECT * FROM sessions WHERE user_id = $1 AND device_id = $2 AND is_active = true',
+            [userId, requestedDeviceId]
+          );
+          
+          if (result.rows.length === 0) {
+            return res.status(403).json({
+              success: false,
+              error: 'Доступ с этого устройства запрещен'
+            });
+          }
+        } finally {
+          client.release();
         }
       }
       
@@ -156,54 +128,7 @@ const sessionMiddleware = {
         error: 'Ошибка проверки устройства'
       });
     }
-  },
-
-  // 🛡️ Проверка безопасности (2FA если требуется)
-  requireSecurity: async (req, res, next) => {
-    try {
-      const { userId } = req.user;
-      
-      // Получаем настройки безопасности пользователя
-      const { UserSecurity } = require('../models');
-      const securitySettings = await UserSecurity.findByUserId(userId);
-      
-      if (!securitySettings) {
-        return next();
-      }
-      
-      // Если включена 2FA, проверяем header
-      if (securitySettings.two_fa_enabled) {
-        const twoFAToken = req.headers['x-2fa-token'];
-        
-        if (!twoFAToken) {
-          return res.status(403).json({
-            success: false,
-            error: 'Требуется 2FA аутентификация',
-            requires2FA: true
-          });
-        }
-        
-        // Проверяем 2FA токен (упрощенно)
-        const jwtUtils = require('../utils/jwtUtils');
-        const tokenResult = jwtUtils.verifyToken(twoFAToken);
-        
-        if (!tokenResult.valid || tokenResult.decoded.type !== '2fa_verified') {
-          return res.status(401).json({
-            success: false,
-            error: 'Неверный 2FA токен'
-          });
-        }
-      }
-      
-      next();
-    } catch (error) {
-      console.error('❌ Ошибка проверки безопасности:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Ошибка проверки безопасности'
-      });
-    }
   }
-};
+}
 
-module.exports = sessionMiddleware;
+module.exports = new SessionMiddleware();

@@ -1,7 +1,6 @@
 const sessionService = require('../services/sessionService');
-const { VerificationCode, UserSecurity } = require('../models');
+const jwtUtils = require('../utils/jwtUtils');
 const db = require('../config/database');
-const { Op } = require('sequelize');
 
 class SessionController {
   // 🔐 Логин с созданием сессии
@@ -10,52 +9,36 @@ class SessionController {
     try {
       const { phone, code, deviceData } = req.body;
       
-      console.log('🔐 Сессионный логин:', { phone, code, deviceData: deviceData?.deviceId });
+      console.log('🔐 Сессионный логин:', { phone, deviceId: deviceData?.deviceId });
       
       // Валидация
-      if (!phone || !code || !deviceData) {
+      if (!phone || !code || !deviceData || !deviceData.deviceId) {
         return res.status(400).json({
           success: false,
-          error: 'Телефон, код и данные устройства обязательны'
+          error: 'Телефон, код и ID устройства обязательны'
         });
       }
       
-      if (!deviceData.deviceId) {
-        return res.status(400).json({
-          success: false,
-          error: 'ID устройства обязателен'
-        });
-      }
+      // Проверяем SMS код
+      const verificationResult = await client.query(
+        'SELECT * FROM verification_codes WHERE phone = $1 AND code = $2 AND is_used = false AND expires_at > NOW()',
+        [phone, code]
+      );
       
-      // 1. Проверяем SMS код из вашей таблицы verification_codes
-      const verificationCode = await VerificationCode.findOne({
-        where: {
-          phone: phone,
-          code: code,
-          is_used: false
-        }
-      });
-      
-      if (!verificationCode) {
+      if (verificationResult.rows.length === 0) {
         return res.status(401).json({
           success: false,
-          error: 'Неверный код подтверждения'
-        });
-      }
-      
-      // Проверяем срок действия
-      if (new Date() > verificationCode.expires_at) {
-        return res.status(401).json({
-          success: false,
-          error: 'Код истек'
+          error: 'Неверный или истекший код'
         });
       }
       
       // Помечаем код как использованный
-      verificationCode.is_used = true;
-      await verificationCode.save();
+      await client.query(
+        'UPDATE verification_codes SET is_used = true WHERE id = $1',
+        [verificationResult.rows[0].id]
+      );
       
-      // 2. Находим пользователя
+      // Находим пользователя
       const userResult = await client.query(
         'SELECT * FROM users WHERE phone = $1',
         [phone]
@@ -70,10 +53,14 @@ class SessionController {
       
       const user = userResult.rows[0];
       
-      // 3. Проверяем security настройки пользователя (2FA и т.д.)
-      const securitySettings = await UserSecurity.findByUserId(user.user_id);
+      // Проверяем 2FA если включена
+      const securityResult = await client.query(
+        'SELECT * FROM user_security WHERE user_id = $1',
+        [user.user_id]
+      );
       
-      // Если включена 2FA, проверяем дополнительно
+      const securitySettings = securityResult.rows[0];
+      
       if (securitySettings?.two_fa_enabled) {
         const { twoFACode } = req.body;
         if (!twoFACode) {
@@ -85,7 +72,6 @@ class SessionController {
           });
         }
         
-        // Проверяем 2FA код (ваша существующая логика)
         const isValid2FA = await this.validate2FACode(securitySettings.two_fa_secret, twoFACode);
         if (!isValid2FA) {
           return res.status(401).json({
@@ -95,31 +81,31 @@ class SessionController {
         }
       }
       
-      // 4. Создаем сессию
+      // Создаем сессию
       const { session, tokens } = await sessionService.createSession(
         user.user_id,
         deviceData,
         req.ip
       );
       
-      // 5. Обновляем статус пользователя
+      // Обновляем статус пользователя
       await client.query(
         'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
         ['online', Date.now(), user.user_id]
       );
       
-      // 6. Возвращаем ответ
-      console.log('✅ Сессия создана для пользователя:', user.user_id, 'Устройство:', deviceData.deviceId);
+      // Форматируем ответ
+      const location = session.location ? JSON.parse(session.location) : null;
       
       res.json({
         success: true,
         session: {
-          id: session.id,
-          deviceId: session.deviceId,
-          deviceName: session.deviceName,
+          id: session.session_id,
+          deviceId: session.device_id,
+          deviceName: session.device_name,
           os: session.os,
-          createdAt: session.createdAt,
-          location: session.location
+          createdAt: session.created_at,
+          location
         },
         tokens: {
           accessToken: tokens.accessToken,
@@ -127,8 +113,8 @@ class SessionController {
           sessionToken: tokens.sessionToken,
           accessTokenExpiresIn: 3600,
           refreshTokenExpiresIn: 2592000,
-          accessTokenExpiresAt: session.accessTokenExpiresAt,
-          refreshTokenExpiresAt: session.refreshTokenExpiresAt
+          accessTokenExpiresAt: session.access_token_expires_at,
+          refreshTokenExpiresAt: session.refresh_token_expires_at
         },
         user: {
           id: user.user_id,
@@ -145,7 +131,7 @@ class SessionController {
       });
       
     } catch (error) {
-      console.error('❌ Ошибка логина с сессией:', error);
+      console.error('❌ Ошибка логина:', error);
       res.status(500).json({
         success: false,
         error: 'Ошибка входа: ' + error.message
@@ -155,12 +141,10 @@ class SessionController {
     }
   }
 
-  // 🔄 Обновление access token
+  // 🔄 Обновление токенов
   async refresh(req, res) {
     try {
       const { refreshToken } = req.body;
-      
-      console.log('🔄 Обновление токенов');
       
       if (!refreshToken) {
         return res.status(400).json({
@@ -174,8 +158,6 @@ class SessionController {
         req.ip
       );
       
-      console.log('✅ Токены обновлены для сессии:', session.id);
-      
       res.json({
         success: true,
         tokens: {
@@ -183,13 +165,8 @@ class SessionController {
           refreshToken: tokens.refreshToken,
           accessTokenExpiresIn: 3600,
           refreshTokenExpiresIn: 2592000,
-          accessTokenExpiresAt: session.accessTokenExpiresAt,
-          refreshTokenExpiresAt: session.refreshTokenExpiresAt
-        },
-        session: {
-          id: session.id,
-          deviceId: session.deviceId,
-          lastActiveAt: session.lastActiveAt
+          accessTokenExpiresAt: session.access_token_expires_at,
+          refreshTokenExpiresAt: session.refresh_token_expires_at
         }
       });
       
@@ -229,12 +206,10 @@ class SessionController {
     }
   }
 
-  // 📋 Получить активные сессии
+  // 📋 Получить сессии
   async getSessions(req, res) {
     try {
       const { userId, deviceId } = req.user;
-      
-      console.log('📋 Получение сессий для пользователя:', userId);
       
       const sessions = await sessionService.getUserSessions(userId, deviceId);
       
@@ -254,21 +229,18 @@ class SessionController {
     }
   }
 
-  // 🚪 Завершить конкретную сессию
+  // 🚪 Завершить сессию
   async terminateSession(req, res) {
     try {
       const { userId } = req.user;
       const { sessionId } = req.params;
       
-      console.log('🚪 Завершение сессии:', sessionId, 'пользователь:', userId);
-      
-      const session = await sessionService.terminateSession(sessionId, userId);
+      await sessionService.terminateSession(sessionId, userId);
       
       res.json({
         success: true,
         message: 'Сессия завершена',
-        sessionId: session.id,
-        terminatedAt: new Date().toISOString()
+        sessionId
       });
       
     } catch (error) {
@@ -288,20 +260,17 @@ class SessionController {
     }
   }
 
-  // 🚫 Завершить все другие сессии
+  // 🚫 Завершить все сессии кроме текущей
   async terminateAllOtherSessions(req, res) {
     try {
       const { userId, deviceId } = req.user;
-      
-      console.log('🚫 Завершение всех других сессий для пользователя:', userId, 'кроме:', deviceId);
       
       const terminatedCount = await sessionService.terminateAllOtherSessions(userId, deviceId);
       
       res.json({
         success: true,
         message: `Завершено ${terminatedCount} других сессий`,
-        terminatedCount,
-        currentDeviceId: deviceId
+        terminatedCount
       });
       
     } catch (error) {
@@ -313,12 +282,10 @@ class SessionController {
     }
   }
 
-  // 🔐 Выход (завершение текущей сессии)
+  // 🔐 Выход
   async logout(req, res) {
     try {
       const { userId, sessionId } = req.user;
-      
-      console.log('🔐 Выход из системы, сессия:', sessionId);
       
       await sessionService.terminateSession(sessionId, userId);
       
@@ -347,41 +314,45 @@ class SessionController {
     }
   }
 
-  // 📱 Проверить статус сессии
+  // 📱 Проверить сессию
   async checkSession(req, res) {
     try {
       const { userId, deviceId, sessionId } = req.user;
       
-      console.log('📱 Проверка статуса сессии:', sessionId);
-      
-      const session = await sessionService.findSessionByToken(
-        req.headers.authorization?.split(' ')[1], 
-        'access'
-      );
-      
-      if (!session) {
-        return res.status(401).json({
-          success: false,
-          error: 'Сессия не найдена'
-        });
-      }
-      
-      const isValid = session.isActive && !session.isAccessTokenExpired();
-      
-      res.json({
-        success: true,
-        isValid,
-        session: {
-          id: session.id,
-          deviceId: session.deviceId,
-          deviceName: session.deviceName,
-          lastActiveAt: session.lastActiveAt,
-          expiresAt: session.accessTokenExpiresAt,
-          expiresIn: Math.max(0, Math.floor((session.accessTokenExpiresAt - new Date()) / 1000)),
-          location: session.location,
-          isActive: session.isActive
+      const client = await db.getClient();
+      try {
+        const result = await client.query(
+          'SELECT * FROM sessions WHERE session_id = $1 AND user_id = $2 AND device_id = $3',
+          [sessionId, userId, deviceId]
+        );
+        
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Сессия не найдена'
+          });
         }
-      });
+        
+        const session = result.rows[0];
+        const expiresIn = Math.max(0, Math.floor((
+          new Date(session.access_token_expires_at) - new Date()
+        ) / 1000));
+        
+        res.json({
+          success: true,
+          isValid: session.is_active && expiresIn > 0,
+          session: {
+            id: session.session_id,
+            deviceId: session.device_id,
+            lastActiveAt: session.last_active_at,
+            expiresAt: session.access_token_expires_at,
+            expiresIn,
+            isActive: session.is_active
+          }
+        });
+      } finally {
+        client.release();
+      }
       
     } catch (error) {
       console.error('❌ Ошибка проверки сессии:', error);
@@ -392,115 +363,99 @@ class SessionController {
     }
   }
 
-  // 🌐 Получить информацию о текущей сессии
+  // 🌐 Получить текущую сессию
   async getCurrentSession(req, res) {
     try {
       const { userId, deviceId, sessionId } = req.user;
       
-      console.log('🌐 Информация о текущей сессии:', sessionId);
-      
-      const session = await sessionService.findSessionByToken(
-        req.headers.authorization?.split(' ')[1], 
-        'access'
-      );
-      
-      if (!session) {
-        return res.status(401).json({
-          success: false,
-          error: 'Сессия не найдена'
+      const client = await db.getClient();
+      try {
+        const result = await client.query(
+          'SELECT * FROM sessions WHERE session_id = $1 AND user_id = $2 AND device_id = $3',
+          [sessionId, userId, deviceId]
+        );
+        
+        if (result.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            error: 'Сессия не найдена'
+          });
+        }
+        
+        const session = result.rows[0];
+        const location = session.location ? JSON.parse(session.location) : null;
+        const deviceInfo = session.device_info ? JSON.parse(session.device_info) : {};
+        
+        res.json({
+          success: true,
+          session: {
+            id: session.session_id,
+            deviceId: session.device_id,
+            deviceName: session.device_name,
+            os: session.os,
+            deviceInfo,
+            ipAddress: session.ip_address,
+            location,
+            createdAt: session.created_at,
+            lastActiveAt: session.last_active_at,
+            accessTokenExpiresAt: session.access_token_expires_at,
+            refreshTokenExpiresAt: session.refresh_token_expires_at,
+            isActive: session.is_active
+          }
         });
+      } finally {
+        client.release();
       }
       
-      res.json({
-        success: true,
-        session: {
-          id: session.id,
-          deviceId: session.deviceId,
-          deviceName: session.deviceName,
-          os: session.os,
-          deviceInfo: session.deviceInfo,
-          ipAddress: session.ipAddress,
-          location: session.location,
-          createdAt: session.createdAt,
-          lastActiveAt: session.lastActiveAt,
-          accessTokenExpiresAt: session.accessTokenExpiresAt,
-          refreshTokenExpiresAt: session.refreshTokenExpiresAt,
-          isActive: session.isActive
-        }
-      });
-      
     } catch (error) {
-      console.error('❌ Ошибка получения информации о сессии:', error);
+      console.error('❌ Ошибка получения сессии:', error);
       res.status(500).json({
         success: false,
-        error: 'Ошибка получения информации'
+        error: 'Ошибка получения сессии'
       });
     }
   }
 
-  // 🔐 Валидация 2FA кода (интегрирую с вашим существующим методом)
-  async validate2FACode(secret, code) {
-    try {
-      const speakeasy = require('speakeasy');
-      return speakeasy.totp.verify({
-        secret: secret,
-        encoding: 'base32',
-        token: code,
-        window: 2
-      });
-    } catch (error) {
-      console.error('Ошибка валидации 2FA:', error);
-      // Резервная проверка для тестов
-      return /^\d{6}$/.test(code);
-    }
-  }
-
-  // 🆕 Отправить SMS код (для совместимости с вашей системой)
+  // 📱 Отправить SMS код
   async sendSMSCode(req, res) {
+    const client = await db.getClient();
     try {
       const { phone, type = 'sms' } = req.body;
       
-      console.log('📱 Отправка SMS кода для сессии:', phone);
+      const code = jwtUtils.generateSMSCode();
+      const codeId = 'code_' + Date.now();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
       
-      // Генерируем код
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      await client.query(
+        `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at)
+         VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [codeId, phone, code, type, expiresAt]
+      );
       
-      // Сохраняем в вашу таблицу verification_codes
-      await VerificationCode.create({
-        phone: phone,
-        code: code,
-        type: type,
-        expiresInMinutes: 10
-      });
-      
-      console.log('✅ SMS код создан для сессии:', phone);
-      
-      // Здесь должна быть интеграция с SMS сервисом
-      // await smsService.sendSMS(phone, `Ваш код: ${code}`);
+      // Здесь отправка SMS
       
       res.json({
         success: true,
         message: 'Код подтверждения отправлен',
-        code: code, // Для тестирования, в продакшене удалить
-        expiresIn: 600 // 10 минут в секундах
+        expiresIn: 600
       });
       
     } catch (error) {
-      console.error('❌ Ошибка отправки SMS кода:', error);
+      console.error('❌ Ошибка отправки SMS:', error);
       res.status(500).json({
         success: false,
         error: 'Ошибка отправки кода'
       });
+    } finally {
+      client.release();
     }
   }
 
-  // 🔍 Проверить регистрацию (адаптированный под сессии)
+  // 🔍 Проверить регистрацию
   async checkRegistration(req, res) {
     const client = await db.getClient();
     try {
       const { phone } = req.body;
-      
-      console.log('🔍 Проверка регистрации для сессии:', phone);
       
       const userResult = await client.query(
         'SELECT * FROM users WHERE phone = $1',
@@ -516,7 +471,12 @@ class SessionController {
       }
       
       const user = userResult.rows[0];
-      const securitySettings = await UserSecurity.findByUserId(user.user_id);
+      const securityResult = await client.query(
+        'SELECT * FROM user_security WHERE user_id = $1',
+        [user.user_id]
+      );
+      
+      const securitySettings = securityResult.rows[0];
       
       res.json({
         success: true,
@@ -546,34 +506,19 @@ class SessionController {
     }
   }
 
-  // 🧹 Очистка истекших сессий (админ)
-  async cleanupExpiredSessions(req, res) {
+  // 🔐 Валидация 2FA
+  async validate2FACode(secret, code) {
     try {
-      const { userId, role } = req.user;
-      
-      if (role !== 'admin' && role !== 'super_admin') {
-        return res.status(403).json({
-          success: false,
-          error: 'Доступ запрещен'
-        });
-      }
-      
-      console.log('🧹 Очистка истекших сессий, инициатор:', userId);
-      
-      const cleanedCount = await sessionService.cleanupExpiredSessions();
-      
-      res.json({
-        success: true,
-        message: `Очищено ${cleanedCount} истекших сессий`,
-        cleanedCount
+      const speakeasy = require('speakeasy');
+      return speakeasy.totp.verify({
+        secret: secret,
+        encoding: 'base32',
+        token: code,
+        window: 2
       });
-      
     } catch (error) {
-      console.error('❌ Ошибка очистки сессий:', error);
-      res.status(500).json({
-        success: false,
-        error: 'Ошибка очистки сессий'
-      });
+      console.error('Ошибка валидации 2FA:', error);
+      return /^\d{6}$/.test(code);
     }
   }
 }

@@ -216,7 +216,7 @@ async function initializeDatabase() {
 
     await db.query(`
       CREATE TABLE IF NOT EXISTS sessions (
-        session_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        session_id VARCHAR(100) PRIMARY KEY,
         user_id VARCHAR(50) NOT NULL,
         device_id VARCHAR(255) NOT NULL,
         device_name VARCHAR(100) NOT NULL DEFAULT 'Unknown Device',
@@ -232,9 +232,7 @@ async function initializeDatabase() {
         last_active_at TIMESTAMP DEFAULT NOW(),
         is_active BOOLEAN DEFAULT true,
         created_at TIMESTAMP DEFAULT NOW(),
-        
-        UNIQUE(device_id, user_id, is_active),
-        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+        UNIQUE(user_id, device_id, is_active)
       )
     `);
 
@@ -242,10 +240,11 @@ async function initializeDatabase() {
       CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_device_id ON sessions(device_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_session_token ON sessions(session_token);
-      CREATE INDEX IF NOT EXISTS idx_sessions_refresh_token ON sessions(refresh_token);
       CREATE INDEX IF NOT EXISTS idx_sessions_access_token ON sessions(access_token);
+      CREATE INDEX IF NOT EXISTS idx_sessions_refresh_token ON sessions(refresh_token);
       CREATE INDEX IF NOT EXISTS idx_sessions_is_active ON sessions(is_active);
       CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(refresh_token_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_user_device ON sessions(user_id, device_id);
     `);
 
     await db.query(`
