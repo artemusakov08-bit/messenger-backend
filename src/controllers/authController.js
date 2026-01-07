@@ -1,7 +1,6 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
-const { UserSecurity, VerificationCode } = require('../models');
-const DeviceSession = require('../models/DeviceSession');
+const { UserSecurity, VerificationCode, Session } = require('../models');
 const jwtUtils = require('../utils/jwtUtils');
 
 console.log('🔑 === ПРОВЕРКА JWT_SECRET ===');
@@ -15,8 +14,6 @@ if (!JWT_SECRET) {
 }
 
 console.log('✅ JWT_SECRET загружен');
-console.log('🔑 Длина ключа:', JWT_SECRET.length);
-console.log('🔑 Первые 5 символов:', JWT_SECRET.substring(0, 5) + '...');
 console.log('🚀 AuthController инициализирован');
 
 class AuthController {
@@ -33,22 +30,28 @@ class AuthController {
             }
 
             const code = Math.floor(100000 + Math.random() * 900000).toString();
+            const codeId = 'code_' + Date.now();
+            const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 минут
             
-            await VerificationCode.create({
-                phone: phone,
-                code: code,
-                type: type,
-                expiresInMinutes: 10
-            });
-
-            console.log('✅ Код создан:', { phone, code });
-
-            res.json({
-                success: true,
-                message: 'Код подтверждения отправлен',
-                code: code,
-                expiresIn: 10
-            });
+            const client = await db.getClient();
+            try {
+                await client.query(
+                    `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at)
+                     VALUES ($1, $2, $3, $4, $5, NOW())`,
+                    [codeId, phone, code, type, expiresAt]
+                );
+                
+                console.log('✅ Код создан:', { phone, code });
+                
+                res.json({
+                    success: true,
+                    message: 'Код подтверждения отправлен',
+                    code: code, // Для тестирования
+                    expiresIn: 10
+                });
+            } finally {
+                client.release();
+            }
 
         } catch (error) {
             console.error('❌ Ошибка отправки кода:', error);
@@ -87,7 +90,11 @@ class AuthController {
             }
 
             const user = userResult.rows[0];
-            const securitySettings = await UserSecurity.findByUserId(user.user_id);
+            const securityResult = await client.query(
+                'SELECT * FROM user_security WHERE user_id = $1',
+                [user.user_id]
+            );
+            const securitySettings = securityResult.rows[0];
 
             console.log('✅ Пользователь найден:', user.user_id);
 
@@ -120,7 +127,7 @@ class AuthController {
         }
     }
 
-    // 🆕 СОЗДАНИЕ СЕССИИ УСТРОЙСТВА
+    // 🆕 СОЗДАНИЕ СЕССИИ УСТРОЙСТВА (исправленная)
     async createDeviceSession(req, res) {
         const client = await db.getClient();
         try {
@@ -151,54 +158,77 @@ class AuthController {
             
             // Вычисляем даты истечения
             const now = new Date();
-            const accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000); // +1 час
-            const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000); // +30 дней
+            const accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000);
+            const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
 
-            // Создаем или обновляем сессию
-            const [session, created] = await DeviceSession.findOrCreate({
-                where: { userId, deviceId },
-                defaults: {
-                    deviceName: deviceInfo.deviceName || 'Android Device',
-                    deviceInfo,
-                    accessToken: tokenPair.accessToken,
-                    refreshToken: tokenPair.refreshToken,
-                    accessTokenExpiresAt,
-                    refreshTokenExpiresAt,
-                    ipAddress: req.ip,
-                    isActive: true
-                }
-            });
+            // Проверяем существующую сессию
+            const existingSession = await client.query(
+                'SELECT * FROM sessions WHERE user_id = $1 AND device_id = $2 AND is_active = true',
+                [userId, deviceId]
+            );
 
-            if (!created) {
+            let session;
+            
+            if (existingSession.rows.length > 0) {
                 // Обновляем существующую сессию
-                session.accessToken = tokenPair.accessToken;
-                session.refreshToken = tokenPair.refreshToken;
-                session.accessTokenExpiresAt = accessTokenExpiresAt;
-                session.refreshTokenExpiresAt = refreshTokenExpiresAt;
-                session.deviceInfo = deviceInfo;
-                session.ipAddress = req.ip;
-                session.isActive = true;
-                session.lastActiveAt = now;
-                await session.save();
+                const result = await client.query(
+                    `UPDATE sessions SET 
+                        device_name = $1, device_info = $2, access_token = $3, refresh_token = $4,
+                        access_token_expires_at = $5, refresh_token_expires_at = $6,
+                        ip_address = $7, last_active_at = $8
+                     WHERE session_id = $9 RETURNING *`,
+                    [
+                        deviceInfo.deviceName || 'Android Device',
+                        JSON.stringify(deviceInfo),
+                        tokenPair.accessToken,
+                        tokenPair.refreshToken,
+                        accessTokenExpiresAt,
+                        refreshTokenExpiresAt,
+                        req.ip,
+                        now,
+                        existingSession.rows[0].session_id
+                    ]
+                );
+                session = result.rows[0];
+                console.log('✅ Сессия обновлена для устройства:', deviceId);
+            } else {
+                // Создаем новую сессию
+                const sessionId = 'sess_' + Date.now();
+                const result = await client.query(
+                    `INSERT INTO sessions (
+                        session_id, user_id, device_id, device_name, device_info,
+                        access_token, refresh_token, access_token_expires_at, refresh_token_expires_at,
+                        ip_address, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                    [
+                        sessionId, userId, deviceId,
+                        deviceInfo.deviceName || 'Android Device',
+                        JSON.stringify(deviceInfo),
+                        tokenPair.accessToken,
+                        tokenPair.refreshToken,
+                        accessTokenExpiresAt,
+                        refreshTokenExpiresAt,
+                        req.ip,
+                        now
+                    ]
+                );
+                session = result.rows[0];
+                console.log('✅ Создана сессия для устройства:', deviceId);
             }
-
-            console.log(`✅ ${created ? 'Создана' : 'Обновлена'} сессия для устройства:`, deviceId);
 
             res.json({
                 success: true,
                 session: {
-                    id: session.id,
-                    deviceId: session.deviceId,
-                    deviceName: session.deviceName,
-                    createdAt: session.createdAt
+                    id: session.session_id,
+                    deviceId: session.device_id,
+                    deviceName: session.device_name,
+                    createdAt: session.created_at
                 },
                 tokens: {
                     accessToken: tokenPair.accessToken,
                     refreshToken: tokenPair.refreshToken,
-                    accessTokenExpiresIn: tokenPair.accessTokenExpiresIn,
-                    refreshTokenExpiresIn: tokenPair.refreshTokenExpiresIn,
-                    accessTokenExpiresAt: accessTokenExpiresAt.toISOString(),
-                    refreshTokenExpiresAt: refreshTokenExpiresAt.toISOString()
+                    accessTokenExpiresAt: session.access_token_expires_at,
+                    refreshTokenExpiresAt: session.refresh_token_expires_at
                 },
                 user: {
                     id: userResult.rows[0].user_id,
@@ -218,8 +248,9 @@ class AuthController {
         }
     }
 
-    // 🔄 ОБНОВЛЕНИЕ ACCESS TOKEN
+    // 🔄 ОБНОВЛЕНИЕ ACCESS TOKEN (исправленная)
     async refreshToken(req, res) {
+        const client = await db.getClient();
         try {
             const { refreshToken } = req.body;
             
@@ -243,36 +274,51 @@ class AuthController {
             const { userId, deviceId } = tokenResult.decoded;
             
             // Ищем активную сессию
-            const session = await DeviceSession.findByRefreshToken(refreshToken);
+            const sessionResult = await client.query(
+                'SELECT * FROM sessions WHERE refresh_token = $1 AND is_active = true',
+                [refreshToken]
+            );
             
-            if (!session) {
+            if (sessionResult.rows.length === 0) {
                 return res.status(401).json({
                     success: false,
                     error: 'Сессия не найдена или неактивна'
                 });
             }
 
+            const session = sessionResult.rows[0];
+            
             // Генерируем новую пару токенов
             const tokenPair = jwtUtils.generateTokenPair(userId, deviceId);
             
             // Обновляем токены в сессии
             const now = new Date();
-            session.accessToken = tokenPair.accessToken;
-            session.refreshToken = tokenPair.refreshToken;
-            session.accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000);
-            session.refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
-            session.lastActiveAt = now;
-            await session.save();
+            const result = await client.query(
+                `UPDATE sessions SET 
+                    access_token = $1,
+                    refresh_token = $2,
+                    access_token_expires_at = $3,
+                    refresh_token_expires_at = $4,
+                    last_active_at = $5
+                 WHERE session_id = $6 RETURNING *`,
+                [
+                    tokenPair.accessToken,
+                    tokenPair.refreshToken,
+                    new Date(now.getTime() + 3600 * 1000),
+                    new Date(now.getTime() + 30 * 24 * 3600 * 1000),
+                    now,
+                    session.session_id
+                ]
+            );
 
+            const updatedSession = result.rows[0];
             console.log(`✅ Токены обновлены для устройства:`, deviceId);
 
             res.json({
                 success: true,
                 accessToken: tokenPair.accessToken,
                 refreshToken: tokenPair.refreshToken,
-                accessTokenExpiresIn: tokenPair.accessTokenExpiresIn,
-                refreshTokenExpiresIn: tokenPair.refreshTokenExpiresIn,
-                accessTokenExpiresAt: session.accessTokenExpiresAt.toISOString()
+                accessTokenExpiresAt: updatedSession.access_token_expires_at
             });
 
         } catch (error) {
@@ -281,33 +327,41 @@ class AuthController {
                 success: false,
                 error: 'Ошибка обновления токена: ' + error.message
             });
+        } finally {
+            client.release();
         }
     }
 
-    // 📋 ПОЛУЧЕНИЕ АКТИВНЫХ СЕССИЙ ПОЛЬЗОВАТЕЛЯ
+    // 📋 ПОЛУЧЕНИЕ АКТИВНЫХ СЕССИЙ ПОЛЬЗОВАТЕЛЯ (исправленная)
     async getSessions(req, res) {
+        const client = await db.getClient();
         try {
-            const { userId } = req;
+            const { userId } = req.user;
             
-            const sessions = await DeviceSession.getUserSessions(userId);
+            const result = await client.query(
+                `SELECT * FROM sessions 
+                 WHERE user_id = $1 AND is_active = true 
+                 ORDER BY last_active_at DESC`,
+                [userId]
+            );
             
-            const formattedSessions = sessions.map(session => ({
-                id: session.id,
-                deviceId: session.deviceId,
-                deviceName: session.deviceName,
-                deviceInfo: session.deviceInfo,
-                ipAddress: session.ipAddress,
-                location: session.location,
-                createdAt: session.createdAt,
-                lastActiveAt: session.lastActiveAt,
-                isCurrent: session.deviceId === req.deviceId,
-                isActive: session.isActive
+            const formattedSessions = result.rows.map(session => ({
+                id: session.session_id,
+                deviceId: session.device_id,
+                deviceName: session.device_name,
+                deviceInfo: session.device_info ? JSON.parse(session.device_info) : {},
+                ipAddress: session.ip_address,
+                location: session.location ? JSON.parse(session.location) : null,
+                createdAt: session.created_at,
+                lastActiveAt: session.last_active_at,
+                isCurrent: session.device_id === req.user.deviceId,
+                isActive: session.is_active
             }));
 
             res.json({
                 success: true,
                 sessions: formattedSessions,
-                count: sessions.length
+                count: formattedSessions.length
             });
 
         } catch (error) {
@@ -316,43 +370,44 @@ class AuthController {
                 success: false,
                 error: 'Ошибка получения сессий: ' + error.message
             });
+        } finally {
+            client.release();
         }
     }
 
-    // 🚪 ЗАВЕРШЕНИЕ КОНКРЕТНОЙ СЕССИИ
+    // 🚪 ЗАВЕРШЕНИЕ КОНКРЕТНОЙ СЕССИИ (исправленная)
     async endSession(req, res) {
+        const client = await db.getClient();
         try {
-            const { userId } = req;
+            const { userId } = req.user;
             const { sessionId } = req.params;
             
-            const session = await DeviceSession.findOne({
-                where: {
-                    id: sessionId,
-                    userId
-                }
-            });
+            const result = await client.query(
+                'UPDATE sessions SET is_active = false WHERE session_id = $1 AND user_id = $2 RETURNING *',
+                [sessionId, userId]
+            );
             
-            if (!session) {
+            if (result.rows.length === 0) {
                 return res.status(404).json({
                     success: false,
                     error: 'Сессия не найдена'
                 });
             }
 
+            const session = result.rows[0];
+            
             // Нельзя завершить текущую сессию через этот метод
-            if (session.deviceId === req.deviceId) {
+            if (session.device_id === req.user.deviceId) {
                 return res.status(400).json({
                     success: false,
                     error: 'Для завершения текущей сессии используйте logout'
                 });
             }
 
-            await session.deactivate();
-            
             res.json({
                 success: true,
                 message: 'Сессия завершена',
-                sessionId: session.id
+                sessionId: session.session_id
             });
 
         } catch (error) {
@@ -361,28 +416,27 @@ class AuthController {
                 success: false,
                 error: 'Ошибка завершения сессии: ' + error.message
             });
+        } finally {
+            client.release();
         }
     }
 
-    // 🚫 ЗАВЕРШЕНИЕ ВСЕХ СЕССИЙ (кроме текущей)
+    // 🚫 ЗАВЕРШЕНИЕ ВСЕХ СЕССИЙ (кроме текущей) (исправленная)
     async endAllSessions(req, res) {
         const client = await db.getClient();
         try {
-            const { userId, deviceId } = req;
+            const { userId, deviceId } = req.user;
             
-            await DeviceSession.update(
-                { isActive: false },
-                {
-                    where: {
-                        userId,
-                        deviceId: { [Op.ne]: deviceId } // Все кроме текущей
-                    }
-                }
+            const result = await client.query(
+                'UPDATE sessions SET is_active = false WHERE user_id = $1 AND device_id != $2 AND is_active = true RETURNING COUNT(*)',
+                [userId, deviceId]
             );
+            
+            const count = parseInt(result.rows[0].count);
             
             res.json({
                 success: true,
-                message: 'Все другие сессии завершены'
+                message: `Все другие сессии (${count}) завершены`
             });
 
         } catch (error) {
@@ -396,17 +450,22 @@ class AuthController {
         }
     }
 
-    // 🚪 ВЫХОД (завершение текущей сессии)
+    // 🚪 ВЫХОД (завершение текущей сессии) (исправленная)
     async logout(req, res) {
+        const client = await db.getClient();
         try {
-            const { userId, deviceId } = req;
+            const { userId, deviceId } = req.user;
             
-            const session = await DeviceSession.findOne({
-                where: { userId, deviceId, isActive: true }
-            });
+            const result = await client.query(
+                'UPDATE sessions SET is_active = false WHERE user_id = $1 AND device_id = $2 AND is_active = true RETURNING *',
+                [userId, deviceId]
+            );
             
-            if (session) {
-                await session.deactivate();
+            if (result.rows.length > 0) {
+                await client.query(
+                    'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+                    ['offline', Date.now(), userId]
+                );
             }
             
             res.json({
@@ -420,156 +479,158 @@ class AuthController {
                 success: false,
                 error: 'Ошибка выхода: ' + error.message
             });
+        } finally {
+            client.release();
         }
     }
 
-async register(req, res) {
-    const client = await db.getClient();
-    
-    try {
-        await client.query('BEGIN'); // Начало транзакции
+    async register(req, res) {
+        const client = await db.getClient();
         
-        const { phone, displayName, username, role = 'user' } = req.body;
-        console.log('🆕 Регистрация (с транзакцией):', { phone, username });
+        try {
+            await client.query('BEGIN'); // Начало транзакции
+            
+            const { phone, displayName, username, role = 'user' } = req.body;
+            console.log('🆕 Регистрация (с транзакцией):', { phone, username });
 
-        // 1. Проверка телефона
-        const phoneCheck = await client.query(
-            'SELECT phone FROM users WHERE phone = $1 FOR UPDATE',
-            [phone]
-        );
-        
-        if (phoneCheck.rows.length > 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                success: false,
-                error: 'Пользователь с таким телефоном уже существует' 
-            });
-        }
-
-        // 2. Проверка username (если указан)
-        const cleanUsername = username ? username.trim().toLowerCase() : null;
-        
-        if (cleanUsername) {
-            // Проверка формата
-            const usernameRegex = /^[a-zA-Z0-9_]+$/;
-            if (cleanUsername.length < 3 || !usernameRegex.test(cleanUsername)) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Username должен быть минимум 3 символа и содержать только буквы, цифры и подчеркивание' 
-                });
-            }
-
-            // Проверка в БД с блокировкой
-            const usernameCheck = await client.query(
-                'SELECT username FROM users WHERE LOWER(username) = LOWER($1) FOR UPDATE',
-                [cleanUsername]
+            // 1. Проверка телефона
+            const phoneCheck = await client.query(
+                'SELECT phone FROM users WHERE phone = $1 FOR UPDATE',
+                [phone]
             );
             
-            if (usernameCheck.rows.length > 0) {
+            if (phoneCheck.rows.length > 0) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ 
                     success: false,
-                    error: `Username @${cleanUsername} уже занят` 
+                    error: 'Пользователь с таким телефоном уже существует' 
                 });
             }
-        }
 
-        // 3. Создание пользователя
-        const timestamp = Date.now();
-        const userId = 'user_' + timestamp;
-        const finalUsername = cleanUsername || phone;
-        const finalDisplayName = displayName || "User " + phone.slice(-4);
-
-        const result = await client.query(
-            `INSERT INTO users (
-                user_id, phone, username, display_name, 
-                role, is_premium, is_banned, warnings, auth_level,
-                status, last_seen
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-            [
-                userId, 
-                phone,
-                finalUsername,
-                finalDisplayName,
-                role,
-                false,
-                false,
-                0,
-                'sms_only',
-                'offline',
-                Date.now()
-            ]
-        );
-
-        const newUser = result.rows[0];
-        
-        // 4. Создание security записи
-        await UserSecurity.createOrUpdate(newUser.user_id);
-        
-        await client.query('COMMIT'); // Фиксация транзакции
-        
-        console.log('✅ Пользователь зарегистрирован:', { 
-            id: newUser.user_id, 
-            username: newUser.username 
-        });
-
-        const tempToken = jwt.sign(
-            { 
-                userId: newUser.user_id,
-                type: 'registration',
-                phone: newUser.phone
-            },
-            JWT_SECRET,
-            { expiresIn: '1h' }
-        );
-
-        res.status(201).json({
-            success: true,
-            message: 'Пользователь успешно зарегистрирован',
-            tempToken: tempToken,
-            user: {
-                id: newUser.user_id,
-                phone: newUser.phone,
-                username: newUser.username,
-                displayName: newUser.display_name,
-                role: newUser.role,
-                is_premium: newUser.is_premium,
-                authLevel: newUser.auth_level
-            }
-        });
-
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('❌ Ошибка регистрации:', error);
-        
-        // Обработка ошибки UNIQUE constraint
-        if (error.code === '23505') {
-            const constraint = error.constraint || '';
+            // 2. Проверка username (если указан)
+            const cleanUsername = username ? username.trim().toLowerCase() : null;
             
-            if (constraint.includes('username')) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Этот username уже занят' 
-                });
+            if (cleanUsername) {
+                // Проверка формата
+                const usernameRegex = /^[a-zA-Z0-9_]+$/;
+                if (cleanUsername.length < 3 || !usernameRegex.test(cleanUsername)) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ 
+                        success: false,
+                        error: 'Username должен быть минимум 3 символа и содержать только буквы, цифры и подчеркивание' 
+                    });
+                }
+
+                // Проверка в БД с блокировкой
+                const usernameCheck = await client.query(
+                    'SELECT username FROM users WHERE LOWER(username) = LOWER($1) FOR UPDATE',
+                    [cleanUsername]
+                );
+                
+                if (usernameCheck.rows.length > 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ 
+                        success: false,
+                        error: `Username @${cleanUsername} уже занят` 
+                    });
+                }
+            }
+
+            // 3. Создание пользователя
+            const timestamp = Date.now();
+            const userId = 'user_' + timestamp;
+            const finalUsername = cleanUsername || phone;
+            const finalDisplayName = displayName || "User " + phone.slice(-4);
+
+            const result = await client.query(
+                `INSERT INTO users (
+                    user_id, phone, username, display_name, 
+                    role, is_premium, is_banned, warnings, auth_level,
+                    status, last_seen
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                [
+                    userId, 
+                    phone,
+                    finalUsername,
+                    finalDisplayName,
+                    role,
+                    false,
+                    false,
+                    0,
+                    'sms_only',
+                    'offline',
+                    Date.now()
+                ]
+            );
+
+            const newUser = result.rows[0];
+            
+            // 4. Создание security записи
+            await UserSecurity.createOrUpdate(newUser.user_id);
+            
+            await client.query('COMMIT'); // Фиксация транзакции
+            
+            console.log('✅ Пользователь зарегистрирован:', { 
+                id: newUser.user_id, 
+                username: newUser.username 
+            });
+
+            const tempToken = jwt.sign(
+                { 
+                    userId: newUser.user_id,
+                    type: 'registration',
+                    phone: newUser.phone
+                },
+                JWT_SECRET,
+                { expiresIn: '1h' }
+            );
+
+            res.status(201).json({
+                success: true,
+                message: 'Пользователь успешно зарегистрирован',
+                tempToken: tempToken,
+                user: {
+                    id: newUser.user_id,
+                    phone: newUser.phone,
+                    username: newUser.username,
+                    displayName: newUser.display_name,
+                    role: newUser.role,
+                    is_premium: newUser.is_premium,
+                    authLevel: newUser.auth_level
+                }
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            console.error('❌ Ошибка регистрации:', error);
+            
+            // Обработка ошибки UNIQUE constraint
+            if (error.code === '23505') {
+                const constraint = error.constraint || '';
+                
+                if (constraint.includes('username')) {
+                    return res.status(400).json({ 
+                        success: false,
+                        error: 'Этот username уже занят' 
+                    });
+                }
+                
+                if (constraint.includes('phone')) {
+                    return res.status(400).json({ 
+                        success: false,
+                        error: 'Этот телефон уже зарегистрирован' 
+                    });
+                }
             }
             
-            if (constraint.includes('phone')) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Этот телефон уже зарегистрирован' 
-                });
-            }
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка сервера: ' + error.message 
+            });
+        } finally {
+            client.release();
         }
-        
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка сервера: ' + error.message 
-        });
-    } finally {
-        client.release();
     }
-}
 
     async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
@@ -585,14 +646,13 @@ async register(req, res) {
                 });
             }
 
-            console.log('🔍 Поиск кода для:', phone);
-            const verificationCode = await VerificationCode.findOne({
-                phone: phone, 
-                code: code, 
-                type: type
-            });
+            // Проверяем код
+            const codeResult = await client.query(
+                'SELECT * FROM verification_codes WHERE phone = $1 AND code = $2 AND is_used = false AND expires_at > NOW()',
+                [phone, code]
+            );
 
-            if (!verificationCode) {
+            if (codeResult.rows.length === 0) {
                 console.log('❌ Код не найден или истек');
                 return res.status(400).json({ 
                     success: false,
@@ -600,21 +660,11 @@ async register(req, res) {
                 });
             }
 
-            if (verificationCode.is_used) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Код уже использован' 
-                });
-            }
-
-            if (new Date() > verificationCode.expires_at) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Код истек' 
-                });
-            }
-
-            await VerificationCode.markAsUsed(verificationCode.id);
+            // Помечаем код как использованный
+            await client.query(
+                'UPDATE verification_codes SET is_used = true WHERE id = $1',
+                [codeResult.rows[0].id]
+            );
 
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
@@ -629,16 +679,17 @@ async register(req, res) {
             }
 
             const user = userResult.rows[0];
-            const securitySettings = await UserSecurity.findByUserId(user.user_id);
+            const securityResult = await client.query(
+                'SELECT * FROM user_security WHERE user_id = $1',
+                [user.user_id]
+            );
+            const securitySettings = securityResult.rows[0];
 
             await client.query(
                 'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
                 ['online', Date.now(), user.user_id]
             );
 
-            console.log('🔑 Генерация токена с JWT_SECRET...');
-            console.log('🔑 JWT_SECRET длина:', JWT_SECRET.length);
-            
             const token = jwt.sign(
                 { 
                     userId: user.user_id, 
@@ -650,7 +701,6 @@ async register(req, res) {
             );
 
             console.log('✅ Логин успешен:', user.user_id);
-            console.log('✅ Токен сгенерирован, длина:', token.length);
 
             res.json({
                 success: true,
@@ -755,11 +805,12 @@ async register(req, res) {
     }
 
     async getAuthRequirements(req, res) {
+        const client = await db.getClient();
         try {
             const { phone } = req.params;
             console.log('🔍 Требования аутентификации для:', phone);
 
-            const userResult = await db.query(
+            const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
                 [phone]
             );
@@ -772,7 +823,11 @@ async register(req, res) {
             }
 
             const user = userResult.rows[0];
-            const securitySettings = await UserSecurity.findByUserId(user.user_id);
+            const securityResult = await client.query(
+                'SELECT * FROM user_security WHERE user_id = $1',
+                [user.user_id]
+            );
+            const securitySettings = securityResult.rows[0];
 
             let requirements = ['sms'];
             
@@ -802,6 +857,8 @@ async register(req, res) {
                 success: false,
                 error: error.message 
             });
+        } finally {
+            client.release();
         }
     }
 
@@ -822,7 +879,11 @@ async register(req, res) {
             }
 
             const user = userResult.rows[0];
-            const securitySettings = await UserSecurity.findByUserId(user.user_id);
+            const securityResult = await client.query(
+                'SELECT * FROM user_security WHERE user_id = $1',
+                [user.user_id]
+            );
+            const securitySettings = securityResult.rows[0];
 
             res.json({
                 success: true,
@@ -858,8 +919,13 @@ async register(req, res) {
     }
 
     async cleanExpiredCodes(req, res) {
+        const client = await db.getClient();
         try {
-            const deletedCount = await VerificationCode.cleanExpiredCodes();
+            const result = await client.query(
+                'DELETE FROM verification_codes WHERE expires_at < NOW() RETURNING COUNT(*)'
+            );
+            
+            const deletedCount = parseInt(result.rows[0].count);
             
             res.json({
                 success: true,
@@ -873,6 +939,8 @@ async register(req, res) {
                 success: false,
                 error: error.message 
             });
+        } finally {
+            client.release();
         }
     }
 }

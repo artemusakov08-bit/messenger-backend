@@ -4,31 +4,30 @@ const crypto = require('crypto');
 class Session {
   // 🆕 Создать сессию
   static async create(sessionData) {
-    const {
-      userId,
-      deviceId,
-      deviceName = 'Unknown Device',
-      os = 'Unknown',
-      deviceInfo = {},
-      sessionToken,
-      accessToken,
-      refreshToken,
-      ipAddress = null,
-      location = null
-    } = sessionData;
-
     const client = await db.getClient();
     try {
+      const {
+        userId,
+        deviceId,
+        deviceName = 'Unknown Device',
+        os = 'Android',
+        deviceInfo = {},
+        sessionToken,
+        accessToken,
+        refreshToken,
+        ipAddress = null,
+        location = null
+      } = sessionData;
+
       const sessionId = 'sess_' + Date.now() + '_' + crypto.randomBytes(8).toString('hex');
-      
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
       
       const result = await client.query(
         `INSERT INTO sessions (
-          session_id, user_id, device_id, device_name, os, device_info, 
-          session_token, access_token, refresh_token, 
+          session_id, user_id, device_id, device_name, os, device_info,
+          session_token, access_token, refresh_token,
           access_token_expires_at, refresh_token_expires_at,
           ip_address, location, created_at
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
@@ -47,21 +46,7 @@ class Session {
     }
   }
 
-  // 🔍 Найти сессию по ID
-  static async findById(sessionId) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        'SELECT * FROM sessions WHERE session_id = $1',
-        [sessionId]
-      );
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🔍 Найти по access token
+  // 🔍 Найти сессию по access token
   static async findByAccessToken(accessToken) {
     const client = await db.getClient();
     try {
@@ -82,20 +67,6 @@ class Session {
       const result = await client.query(
         'SELECT * FROM sessions WHERE refresh_token = $1 AND is_active = true',
         [refreshToken]
-      );
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🔍 Найти по session token
-  static async findBySessionToken(sessionToken) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        'SELECT * FROM sessions WHERE session_token = $1 AND is_active = true',
-        [sessionToken]
       );
       return result.rows[0] || null;
     } finally {
@@ -126,7 +97,7 @@ class Session {
     }
   }
 
-  // 🔍 Найти сессию по устройству
+  // 🔍 Найти по ID устройства
   static async findByDevice(userId, deviceId) {
     const client = await db.getClient();
     try {
@@ -287,6 +258,58 @@ class Session {
       
       const result = await client.query(query, params);
       return result.rows[0];
+    } finally {
+      client.release();
+    }
+  }
+
+  // 📱 Обновить информацию об устройстве
+  static async updateDeviceInfo(sessionId, deviceInfo) {
+    const client = await db.getClient();
+    try {
+      const result = await client.query(
+        `UPDATE sessions SET 
+          device_info = $1,
+          last_active_at = NOW()
+         WHERE session_id = $2 AND is_active = true
+         RETURNING *`,
+        [JSON.stringify(deviceInfo), sessionId]
+      );
+      
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  // 🔍 Найти по ID
+  static async findById(sessionId) {
+    const client = await db.getClient();
+    try {
+      const result = await client.query(
+        'SELECT * FROM sessions WHERE session_id = $1',
+        [sessionId]
+      );
+      return result.rows[0] || null;
+    } finally {
+      client.release();
+    }
+  }
+
+  // 🌍 Обновить локацию
+  static async updateLocation(sessionId, location) {
+    const client = await db.getClient();
+    try {
+      const result = await client.query(
+        `UPDATE sessions SET 
+          location = $1,
+          last_active_at = NOW()
+         WHERE session_id = $2 AND is_active = true
+         RETURNING *`,
+        [JSON.stringify(location), sessionId]
+      );
+      
+      return result.rows[0] || null;
     } finally {
       client.release();
     }
