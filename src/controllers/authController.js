@@ -162,21 +162,21 @@ class AuthController {
             const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
 
             // Проверяем существующую сессию
-            const existingSession = await client.query(
+            const existingSessionResult = await client.query(
                 'SELECT * FROM sessions WHERE user_id = $1 AND device_id = $2 AND is_active = true',
                 [userId, deviceId]
             );
 
             let session;
             
-            if (existingSession.rows.length > 0) {
+            if (existingSessionResult.rows.length > 0) {
                 // Обновляем существующую сессию
-                const result = await client.query(
+                const updateResult = await client.query(
                     `UPDATE sessions SET 
                         device_name = $1, device_info = $2, access_token = $3, refresh_token = $4,
                         access_token_expires_at = $5, refresh_token_expires_at = $6,
-                        ip_address = $7, last_active_at = $8
-                     WHERE session_id = $9 RETURNING *`,
+                        ip_address = $7, last_active_at = $8, is_active = true
+                    WHERE session_id = $9 RETURNING *`,
                     [
                         deviceInfo.deviceName || 'Android Device',
                         JSON.stringify(deviceInfo),
@@ -186,20 +186,19 @@ class AuthController {
                         refreshTokenExpiresAt,
                         req.ip,
                         now,
-                        existingSession.rows[0].session_id
+                        existingSessionResult.rows[0].session_id
                     ]
                 );
-                session = result.rows[0];
-                console.log('✅ Сессия обновлена для устройства:', deviceId);
+                session = updateResult.rows[0];
             } else {
                 // Создаем новую сессию
                 const sessionId = 'sess_' + Date.now();
-                const result = await client.query(
+                const insertResult = await client.query(
                     `INSERT INTO sessions (
                         session_id, user_id, device_id, device_name, device_info,
                         access_token, refresh_token, access_token_expires_at, refresh_token_expires_at,
-                        ip_address, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                        ip_address, created_at, is_active
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
                     [
                         sessionId, userId, deviceId,
                         deviceInfo.deviceName || 'Android Device',
@@ -209,11 +208,11 @@ class AuthController {
                         accessTokenExpiresAt,
                         refreshTokenExpiresAt,
                         req.ip,
-                        now
+                        now,
+                        true
                     ]
                 );
-                session = result.rows[0];
-                console.log('✅ Создана сессия для устройства:', deviceId);
+                session = insertResult.rows[0];
             }
 
             res.json({

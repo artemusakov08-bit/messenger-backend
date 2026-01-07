@@ -123,13 +123,13 @@ app.use('/api/username', usernameRoutes);
 app.use('/api/moderation', moderationRoutes);
 app.use('/api/session', sessionRoutes); 
 
-const authMiddleware = require('./src/middleware/authMiddleware');
 
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
 const sessionMiddleware = require('./src/middleware/sessionMiddleware');
-app.use('/api/chat', sessionMiddleware.authenticate, chatRoutes);
-app.use('/api/call', sessionMiddleware.authenticate, callRoutes);
-app.use('/api/message', sessionMiddleware.authenticate, messageRoutes);
+app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
+app.use('/api/call', authMiddleware.authenticate, callRoutes);
+app.use('/api/message', authMiddleware.authenticate, messageRoutes);
+app.use('/api/username', authMiddleware.authenticate, usernameRoutes);
 
 // Подключение к PostgreSQL
 const pool = new Pool({

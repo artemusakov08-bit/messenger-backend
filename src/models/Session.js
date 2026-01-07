@@ -1,8 +1,6 @@
 const db = require('../config/database');
-const crypto = require('crypto');
 
 class Session {
-  // 🆕 Создать сессию
   static async create(sessionData) {
     const client = await db.getClient();
     try {
@@ -19,7 +17,7 @@ class Session {
         location = null
       } = sessionData;
 
-      const sessionId = 'sess_' + Date.now() + '_' + crypto.randomBytes(8).toString('hex');
+      const sessionId = 'sess_' + Date.now();
       const now = new Date();
       const accessTokenExpiresAt = new Date(now.getTime() + 3600 * 1000);
       const refreshTokenExpiresAt = new Date(now.getTime() + 30 * 24 * 3600 * 1000);
@@ -46,7 +44,6 @@ class Session {
     }
   }
 
-  // 🔍 Найти сессию по access token
   static async findByAccessToken(accessToken) {
     const client = await db.getClient();
     try {
@@ -60,7 +57,6 @@ class Session {
     }
   }
 
-  // 🔄 Найти по refresh token
   static async findByRefreshToken(refreshToken) {
     const client = await db.getClient();
     try {
@@ -74,7 +70,6 @@ class Session {
     }
   }
 
-  // 📋 Получить все сессии пользователя
   static async findByUserId(userId, currentDeviceId = null) {
     const client = await db.getClient();
     try {
@@ -97,7 +92,6 @@ class Session {
     }
   }
 
-  // 🔍 Найти по ID устройства
   static async findByDevice(userId, deviceId) {
     const client = await db.getClient();
     try {
@@ -111,7 +105,6 @@ class Session {
     }
   }
 
-  // 🔄 Обновить токены
   static async updateTokens(sessionId, newTokens, ipAddress = null) {
     const client = await db.getClient();
     try {
@@ -146,26 +139,6 @@ class Session {
     }
   }
 
-  // 🔄 Обновить активность
-  static async updateActivity(sessionId, ipAddress = null) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        `UPDATE sessions SET 
-          last_active_at = NOW(),
-          ip_address = COALESCE($2, ip_address)
-         WHERE session_id = $1 AND is_active = true
-         RETURNING *`,
-        [sessionId, ipAddress]
-      );
-      
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🚪 Деактивировать сессию
   static async deactivate(sessionId, userId = null) {
     const client = await db.getClient();
     try {
@@ -186,7 +159,6 @@ class Session {
     }
   }
 
-  // 🚫 Деактивировать все сессии кроме указанной
   static async deactivateAllExcept(userId, exceptDeviceId) {
     const client = await db.getClient();
     try {
@@ -198,118 +170,6 @@ class Session {
       );
       
       return parseInt(result.rows[0].count);
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🔍 Проверить истек ли access token
-  static isAccessTokenExpired(session) {
-    if (!session || !session.access_token_expires_at) return true;
-    return new Date() > new Date(session.access_token_expires_at);
-  }
-
-  // 🔍 Проверить истек ли refresh token
-  static isRefreshTokenExpired(session) {
-    if (!session || !session.refresh_token_expires_at) return true;
-    return new Date() > new Date(session.refresh_token_expires_at);
-  }
-
-  // 🔍 Проверить валидность сессии
-  static isValid(session) {
-    return session && 
-           session.is_active && 
-           !this.isRefreshTokenExpired(session);
-  }
-
-  // 🧹 Очистить истекшие сессии
-  static async cleanupExpired() {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        `UPDATE sessions SET is_active = false 
-         WHERE refresh_token_expires_at < NOW() AND is_active = true
-         RETURNING COUNT(*) as count`
-      );
-      
-      return parseInt(result.rows[0].count);
-    } finally {
-      client.release();
-    }
-  }
-
-  // 📊 Получить статистику сессий
-  static async getStats(userId = null) {
-    const client = await db.getClient();
-    try {
-      let query = `
-        SELECT 
-          COUNT(*) as total,
-          COUNT(CASE WHEN is_active = true THEN 1 END) as active,
-          COUNT(CASE WHEN refresh_token_expires_at < NOW() THEN 1 END) as expired
-        FROM sessions
-      `;
-      const params = [];
-      
-      if (userId) {
-        query += ' WHERE user_id = $1';
-        params.push(userId);
-      }
-      
-      const result = await client.query(query, params);
-      return result.rows[0];
-    } finally {
-      client.release();
-    }
-  }
-
-  // 📱 Обновить информацию об устройстве
-  static async updateDeviceInfo(sessionId, deviceInfo) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        `UPDATE sessions SET 
-          device_info = $1,
-          last_active_at = NOW()
-         WHERE session_id = $2 AND is_active = true
-         RETURNING *`,
-        [JSON.stringify(deviceInfo), sessionId]
-      );
-      
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🔍 Найти по ID
-  static async findById(sessionId) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        'SELECT * FROM sessions WHERE session_id = $1',
-        [sessionId]
-      );
-      return result.rows[0] || null;
-    } finally {
-      client.release();
-    }
-  }
-
-  // 🌍 Обновить локацию
-  static async updateLocation(sessionId, location) {
-    const client = await db.getClient();
-    try {
-      const result = await client.query(
-        `UPDATE sessions SET 
-          location = $1,
-          last_active_at = NOW()
-         WHERE session_id = $2 AND is_active = true
-         RETURNING *`,
-        [JSON.stringify(location), sessionId]
-      );
-      
-      return result.rows[0] || null;
     } finally {
       client.release();
     }
