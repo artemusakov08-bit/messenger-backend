@@ -125,7 +125,7 @@ app.use('/api/session', sessionRoutes);
 
 
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
-const sessionMiddleware = require('./src/middleware/sessionMiddleware');
+const authMiddleware = require('./src/middleware/authMiddleware');
 app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
 app.use('/api/call', authMiddleware.authenticate, callRoutes);
 app.use('/api/message', authMiddleware.authenticate, messageRoutes);
