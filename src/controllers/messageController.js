@@ -1,37 +1,38 @@
 const pool = require('../config/database');
 
+let syncService = null;
 let chatSocketInstance = null;
+
+const setSyncService = (service) => {
+    syncService = service;
+};
 
 const setChatSocket = (socketInstance) => {
     chatSocketInstance = socketInstance;
 };
 
-// Универсальный метод извлечения ID участников
 const extractParticipantIds = (chatId) => {
     try {
-        console.log(`🔍 [HTTP] Извлекаем участников из chatId: ${chatId}`);
-        
-        // Формат: "user_123456_user_789012" или "123456_789012"
         const cleanChatId = chatId.replace(/user_/g, '');
         const parts = cleanChatId.split('_');
         
         if (parts.length < 2) {
-            console.error(`❌ [HTTP] Неверный формат chatId: ${chatId}`);
+            console.error(`❌ Неверный формат chatId: ${chatId}`);
             return [];
         }
         
         const participant1 = parts[0];
         const participant2 = parts[1];
         
-        console.log(`🔍 [HTTP] Участники: ${participant1}, ${participant2}`);
         return [participant1, participant2];
         
     } catch (error) {
-        console.error(`❌ [HTTP] Ошибка извлечения участников:`, error);
+        console.error(`❌ Ошибка извлечения участников:`, error);
         return [];
     }
 };
 
+// 📤 Отправка сообщения с синхронизацией
 const sendMessage = async (req, res) => {
     const connection = await pool.connect();
     
@@ -39,19 +40,14 @@ const sendMessage = async (req, res) => {
         await connection.query('BEGIN');
         
         const { chatId, text, senderId, senderName, type = 'text' } = req.body;
+        const { deviceId } = req.user;
         
-        console.log(`📤 [HTTP] Отправка сообщения:`, {
-            chatId,
-            senderId,
-            senderName,
-            textLength: text.length,
-            type
-        });
+        console.log(`📤 Отправка сообщения от ${senderId} (устройство ${deviceId}) в ${chatId}`);
         
         if (!chatId || !text || !senderId || !senderName) {
             await connection.query('ROLLBACK');
             return res.status(400).json({
-                error: 'Missing required fields: chatId, text, senderId, senderName'
+                error: 'Missing required fields'
             });
         }
 
@@ -63,12 +59,10 @@ const sendMessage = async (req, res) => {
 
         if (chatCheck.rows.length === 0) {
             const participants = extractParticipantIds(chatId);
-            
             let otherUserName = 'Приватный чат';
-            let otherUserId = null;
             
             if (participants.length === 2) {
-                otherUserId = participants.find(id => String(id) !== String(senderId));
+                const otherUserId = participants.find(id => String(id) !== String(senderId));
                 
                 if (otherUserId) {
                     const userResult = await connection.query(
@@ -87,9 +81,6 @@ const sendMessage = async (req, res) => {
                 VALUES ($1, $2, $3, $4, $5)`,
                 [chatId, otherUserName, 'private', Date.now(), text]
             );
-            
-            console.log(`✅ [HTTP] Чат создан: ${chatId} (${otherUserName})`);
-            
         } else {
             await connection.query(
                 `UPDATE chats 
@@ -113,108 +104,101 @@ const sendMessage = async (req, res) => {
         
         await connection.query('COMMIT');
         
-        console.log(`✅ [HTTP] Сообщение сохранено: ${messageId}`);
+        console.log(`✅ Сообщение сохранено: ${messageId}`);
         
-        // 3. Отправляем через WebSocket
-        if (chatSocketInstance) {
-            console.log(`📤 [HTTP] Рассылка через WebSocket: ${chatId}`);
+        // 3. Синхронизация через SyncService
+        if (syncService) {
+            // Синхронизация на другие устройства отправителя
+            await syncService.syncMessage(senderId, {
+                chatId: chatId,
+                message: savedMessage,
+                senderDeviceId: deviceId
+            });
             
-            // Проверяем участников
+            // Отправка получателю через chatSocket
             const participants = extractParticipantIds(chatId);
-            console.log(`👥 [HTTP] Участники чата:`, participants);
+            const receiverId = participants.find(id => String(id) !== String(senderId));
             
-            // Отправляем сообщение через WebSocket
-            if (chatSocketInstance.broadcastToChat) {
-                chatSocketInstance.broadcastToChat(chatId, {
+            if (receiverId && chatSocketInstance) {
+                chatSocketInstance.sendToUser(receiverId, {
                     type: 'new_message',
-                    chatId: savedMessage.chat_id,
+                    chatId: chatId,
                     message: savedMessage,
-                    timestamp: Date.now(),
-                    senderId
+                    timestamp: Date.now()
                 });
             }
-            
-            // Уведомляем об обновлении списка чатов
-            if (chatSocketInstance.notifyChatListUpdate) {
-                chatSocketInstance.notifyChatListUpdate(chatId);
-            }
-        } else {
-            console.error('❌ [HTTP] chatSocketInstance не установлен!');
         }
         
         res.status(201).json({
             ...savedMessage,
-            deliveryStatus: 'sent'
+            deliveryStatus: 'sent',
+            synced: true
         });
         
     } catch (error) {
         await connection.query('ROLLBACK');
-        console.error('❌ [HTTP] Ошибка отправки сообщения:', error);
+        console.error('❌ Ошибка отправки сообщения:', error);
         res.status(500).json({ 
             error: 'Internal server error',
-            details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            details: error.message
         });
     } finally {
         connection.release();
     }
 };
 
-const getChatMessages = async (req, res) => {
+// 👁️ Отметка сообщения прочитанным с синхронизацией
+const markMessageAsRead = async (req, res) => {
     try {
-        const { chatId } = req.params;
-        const { limit = 100, offset = 0, after } = req.query;
+        const { messageId, chatId } = req.body;
+        const { userId, deviceId } = req.user;
         
-        console.log(`📥 [HTTP] Запрос сообщений для чата: ${chatId}`);
-        
-        let query = `SELECT * FROM messages WHERE chat_id = $1`;
-        const params = [chatId];
-        let paramIndex = 2;
-        
-        if (after) {
-            query += ` AND timestamp > $${paramIndex}`;
-            params.push(parseInt(after));
-            paramIndex++;
-        }
-        
-        query += ` ORDER BY timestamp ASC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
-        params.push(parseInt(limit), parseInt(offset));
-        
-        const result = await pool.query(query, params);
-        
-        console.log(`✅ [HTTP] Получено ${result.rows.length} сообщений для чата ${chatId}`);
-        res.json(result.rows);
-        
-    } catch (error) {
-        console.error('❌ [HTTP] Ошибка получения сообщений:', error);
-        res.status(500).json({ 
-            error: 'Internal server error',
-            details: error.message 
-        });
-    }
-};
-
-const getRecentMessages = async (req, res) => {
-    try {
-        const { userId } = req.params;
-        const { limit = 20 } = req.query;
-        
-        console.log(`📥 [HTTP] Запрос последних сообщений для: ${userId}`);
+        console.log(`👁️ Отметка прочтения ${messageId} пользователем ${userId} (устройство ${deviceId})`);
         
         const result = await pool.query(
-            `SELECT DISTINCT ON (m.chat_id) m.* 
-             FROM messages m
-             WHERE m.chat_id LIKE $1 OR m.chat_id LIKE $2 OR m.chat_id LIKE $3
-             ORDER BY m.chat_id, m.timestamp DESC 
-             LIMIT $4`,
-            [`%${userId}%`, `${userId}_%`, `%_${userId}`, parseInt(limit)]
+            `UPDATE messages 
+             SET read = true, read_at = $1 
+             WHERE id = $2 AND chat_id = $3
+             RETURNING *`,
+            [Date.now(), messageId, chatId]
         );
         
-        console.log(`✅ [HTTP] Получено ${result.rows.length} сообщений для ${userId}`);
-        res.json(result.rows);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        
+        const updatedMessage = result.rows[0];
+        
+        // Синхронизация статуса прочтения
+        if (syncService) {
+            await syncService.syncMessageRead(userId, {
+                chatId: chatId,
+                messageId: messageId,
+                readerDeviceId: deviceId
+            });
+        }
+        
+        // Уведомление отправителя о прочтении
+        const senderId = updatedMessage.sender_id;
+        if (String(senderId) !== String(userId) && chatSocketInstance) {
+            chatSocketInstance.sendToUser(senderId, {
+                type: 'message_read',
+                messageId: messageId,
+                chatId: chatId,
+                readerId: userId,
+                timestamp: Date.now()
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Message marked as read',
+            messageId: messageId,
+            synced: true
+        });
         
     } catch (error) {
-        console.error('❌ [HTTP] Ошибка получения последних сообщений:', error);
+        console.error('❌ Ошибка отметки прочтения:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             details: error.message 
@@ -222,15 +206,91 @@ const getRecentMessages = async (req, res) => {
     }
 };
 
+// ✏️ Редактирование сообщения с синхронизацией
+const editMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const { newText, chatId } = req.body;
+        const { userId, deviceId } = req.user;
+        
+        console.log(`✏️ Редактирование ${messageId} пользователем ${userId}`);
+        
+        const messageCheck = await pool.query(
+            'SELECT sender_id FROM messages WHERE id = $1',
+            [messageId]
+        );
+        
+        if (messageCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        
+        const message = messageCheck.rows[0];
+        
+        if (String(message.sender_id) !== String(userId)) {
+            return res.status(403).json({ error: 'You can only edit your own messages' });
+        }
+        
+        const result = await pool.query(
+            `UPDATE messages 
+             SET text = $1, edited = true, edited_at = $2 
+             WHERE id = $3
+             RETURNING *`,
+            [newText, Date.now(), messageId]
+        );
+        
+        const editedMessage = result.rows[0];
+        
+        // Синхронизация редактирования
+        if (syncService) {
+            await syncService.syncMessageEdit(userId, {
+                chatId: chatId,
+                messageId: messageId,
+                newText: newText,
+                editorDeviceId: deviceId
+            });
+        }
+        
+        // Уведомление других участников чата
+        const participants = extractParticipantIds(chatId);
+        participants.forEach(participantId => {
+            if (String(participantId) !== String(userId) && chatSocketInstance) {
+                chatSocketInstance.sendToUser(participantId, {
+                    type: 'message_edited',
+                    messageId: messageId,
+                    chatId: chatId,
+                    newText: newText,
+                    timestamp: Date.now()
+                });
+            }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Message edited',
+            editedMessage: editedMessage,
+            synced: true
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка редактирования сообщения:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message 
+        });
+    }
+};
+
+// 🗑️ Удаление сообщения с синхронизацией
 const deleteMessage = async (req, res) => {
     try {
         const { messageId } = req.params;
-        const { userId } = req.body;
+        const { chatId } = req.body;
+        const { userId, deviceId } = req.user;
         
-        console.log(`🗑️ [HTTP] Удаление сообщения: ${messageId} пользователем ${userId}`);
+        console.log(`🗑️ Удаление ${messageId} пользователем ${userId}`);
         
         const messageCheck = await pool.query(
-            'SELECT sender_id, chat_id FROM messages WHERE id = $1',
+            'SELECT sender_id FROM messages WHERE id = $1',
             [messageId]
         );
         
@@ -251,24 +311,118 @@ const deleteMessage = async (req, res) => {
         
         const deletedMessage = result.rows[0];
         
-        if (chatSocketInstance && chatSocketInstance.broadcastToChat) {
-            chatSocketInstance.broadcastToChat(message.chat_id, {
-                type: 'message_deleted',
-                messageId,
-                chatId: message.chat_id,
-                timestamp: Date.now()
+        // Синхронизация удаления
+        if (syncService) {
+            await syncService.syncMessageDelete(userId, {
+                chatId: chatId,
+                messageId: messageId,
+                deleterDeviceId: deviceId
             });
         }
         
-        console.log(`✅ [HTTP] Сообщение удалено: ${messageId}`);
+        // Уведомление других участников чата
+        const participants = extractParticipantIds(chatId);
+        participants.forEach(participantId => {
+            if (String(participantId) !== String(userId) && chatSocketInstance) {
+                chatSocketInstance.sendToUser(participantId, {
+                    type: 'message_deleted',
+                    messageId: messageId,
+                    chatId: chatId,
+                    timestamp: Date.now()
+                });
+            }
+        });
+        
         res.json({ 
             success: true, 
             message: 'Message deleted',
-            deletedMessage 
+            deletedMessage: deletedMessage,
+            synced: true
         });
         
     } catch (error) {
-        console.error('❌ [HTTP] Ошибка удаления сообщения:', error);
+        console.error('❌ Ошибка удаления сообщения:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message 
+        });
+    }
+};
+
+// 💬 Установка статуса "печатает" с синхронизацией
+const setTypingStatus = async (req, res) => {
+    try {
+        const { chatId, isTyping } = req.body;
+        const { userId, deviceId } = req.user;
+        
+        console.log(`💬 Статус печатания: ${userId} ${isTyping ? 'печатает' : 'остановился'} в ${chatId}`);
+        
+        // Синхронизация статуса печатания
+        if (syncService) {
+            await syncService.syncTyping(userId, {
+                chatId: chatId,
+                isTyping: isTyping,
+                deviceId: deviceId
+            });
+        }
+        
+        // Уведомление других участников чата
+        const participants = extractParticipantIds(chatId);
+        participants.forEach(participantId => {
+            if (String(participantId) !== String(userId) && chatSocketInstance) {
+                chatSocketInstance.sendToUser(participantId, {
+                    type: isTyping ? 'user_typing' : 'user_stopped_typing',
+                    chatId: chatId,
+                    userId: userId,
+                    timestamp: Date.now()
+                });
+            }
+        });
+        
+        res.json({
+            success: true,
+            isTyping: isTyping,
+            synced: true
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка установки статуса печатания:', error);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message 
+        });
+    }
+};
+
+// 📥 Получение пропущенных сообщений
+const getMissedMessages = async (req, res) => {
+    try {
+        const { userId } = req.user;
+        const { since } = req.query;
+        
+        console.log(`📥 Получение пропущенных сообщений для ${userId} с ${since}`);
+        
+        const result = await pool.query(
+            `SELECT m.*, c.name as chat_name 
+             FROM messages m
+             JOIN chats c ON m.chat_id = c.id
+             WHERE m.chat_id LIKE $1 
+                OR m.chat_id LIKE $2 
+                OR m.chat_id LIKE $3
+             AND m.timestamp > $4
+             ORDER BY m.timestamp ASC`,
+            [`%${userId}%`, `${userId}_%`, `%_${userId}`, parseInt(since) || 0]
+        );
+        
+        res.json({
+            success: true,
+            missedMessages: result.rows,
+            count: result.rows.length,
+            since: since
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения пропущенных сообщений:', error);
         res.status(500).json({ 
             error: 'Internal server error',
             details: error.message 
@@ -278,9 +432,59 @@ const deleteMessage = async (req, res) => {
 
 module.exports = {
     sendMessage,
-    getChatMessages,
-    getRecentMessages,
+    getChatMessages: async (req, res) => {
+        try {
+            const { chatId } = req.params;
+            const { limit = 100, offset = 0 } = req.query;
+            
+            const result = await pool.query(
+                `SELECT * FROM messages 
+                 WHERE chat_id = $1 
+                 ORDER BY timestamp DESC 
+                 LIMIT $2 OFFSET $3`,
+                [chatId, parseInt(limit), parseInt(offset)]
+            );
+            
+            res.json(result.rows.reverse());
+            
+        } catch (error) {
+            console.error('❌ Ошибка получения сообщений:', error);
+            res.status(500).json({ 
+                error: 'Internal server error',
+                details: error.message 
+            });
+        }
+    },
+    getRecentMessages: async (req, res) => {
+        try {
+            const { userId } = req.params;
+            const { limit = 20 } = req.query;
+            
+            const result = await pool.query(
+                `SELECT DISTINCT ON (m.chat_id) m.* 
+                 FROM messages m
+                 WHERE m.chat_id LIKE $1 OR m.chat_id LIKE $2 OR m.chat_id LIKE $3
+                 ORDER BY m.chat_id, m.timestamp DESC 
+                 LIMIT $4`,
+                [`%${userId}%`, `${userId}_%`, `%_${userId}`, parseInt(limit)]
+            );
+            
+            res.json(result.rows);
+            
+        } catch (error) {
+            console.error('❌ Ошибка получения последних сообщений:', error);
+            res.status(500).json({ 
+                error: 'Internal server error',
+                details: error.message 
+            });
+        }
+    },
+    markMessageAsRead,
+    editMessage,
     deleteMessage,
+    setTypingStatus,
+    getMissedMessages,
+    setSyncService,
     setChatSocket,
     extractParticipantIds
 };

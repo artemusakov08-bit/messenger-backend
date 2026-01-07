@@ -27,13 +27,50 @@ const sessionRoutes = require('./src/routes/session');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
-  },
-  pingInterval: 30000,
-  pingTimeout: 5000,
-  maxHttpBufferSize: 1e6 // 1MB
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+// WebSocket для чата
+const wss = new WebSocket.Server({ 
+    server, 
+    path: '/ws/chat'
+});
+
+// Инициализация сервисов синхронизации
+const SyncService = require('./src/services/SyncService');
+const NotificationSocket = require('./src/sockets/notificationSocket');
+const ChatSocket = require('./src/sockets/chatSocket');
+
+// Создаем сервисы
+const syncService = new SyncService(io);
+const notificationSocket = NotificationSocket.initializeNotificationSocket(io);
+const chatSocket = new ChatSocket(wss);
+
+// Передаем сервисы в контроллеры
+const messageController = require('./src/controllers/messageController');
+messageController.setSyncService(syncService);
+messageController.setChatSocket(chatSocket);
+
+// Socket.IO подключения
+io.on('connection', (socket) => {
+    console.log('🔌 Socket.IO подключен:', socket.id);
+    
+    socket.on('authenticate', (data) => {
+        const { userId, deviceId } = data;
+        if (userId && deviceId) {
+            socket.join(`user:${userId}`);
+            socket.join(`user:${userId}:device:${deviceId}`);
+            socket.join(`user:${userId}:sessions`);
+            socket.emit('authenticated', { userId, deviceId });
+        }
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('🔌 Socket.IO отключен:', socket.id);
+    });
 });
 
 // Инициализируем сервис уведомлений

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Тест аутентификации</title>
+</head>
+<body>
+    <h2>Тест токена</h2>
+    
+    <input type="text" id="token" placeholder="Вставьте ваш токен" style="width: 500px; padding: 10px;">
+    <br><br>
+    
+    <button onclick="testToken()">Проверить токен</button>
+    <button onclick="testAuth()">Тест аутентификации</button>
+    
+    <div id="result" style="margin-top: 20px; padding: 15px; border: 1px solid #ccc;"></div>
+    
+    <script>
+        const SERVER_URL = 'https://messenger-backend-v2.onrender.com/';
+        
+        async function testToken() {
+            const token = document.getElementById('token').value;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.innerHTML = 'Тестируем...';
+            
+            try {
+                const response = await fetch(SERVER_URL + 'api/debug/token', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                });
+                
+                const data = await response.json();
+                resultDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error.message;
+            }
+        }
+        
+        async function testAuth() {
+            const token = document.getElementById('token').value;
+            const resultDiv = document.getElementById('result');
+            
+            resultDiv.innerHTML = 'Тестируем аутентификацию...';
+            
+            try {
+                const response = await fetch(SERVER_URL + 'api/debug/auth-test', {
+                    headers: {
+                        'Authorization': 'Bearer ' + token
+                    }
+                });
+                
+                const data = await response.json();
+                resultDiv.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+            } catch (error) {
+                resultDiv.innerHTML = 'Ошибка: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
