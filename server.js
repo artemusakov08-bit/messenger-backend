@@ -1128,6 +1128,87 @@ app.get('/api/chat/my-chats', authMiddleware.authenticate, async (req, res) => {
     }
 });
 
+// ТЕСТОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ ТОКЕНА
+app.get('/api/debug/token', async (req, res) => {
+    try {
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+        
+        console.log('🔍 === ДЕБАГ ТОКЕНА ===');
+        console.log('📨 Заголовок:', authHeader);
+        
+        if (!authHeader) {
+            return res.json({
+                success: false,
+                error: 'Нет заголовка Authorization',
+                receivedHeaders: Object.keys(req.headers)
+            });
+        }
+        
+        let token;
+        if (authHeader.startsWith('Bearer ')) {
+            token = authHeader.substring(7);
+        } else {
+            token = authHeader;
+        }
+        
+        console.log('🔑 Токен (первые 50 символов):', token.substring(0, 50) + '...');
+        console.log('🔑 Длина токена:', token.length);
+        
+        // Декодируем без проверки
+        const jwt = require('jsonwebtoken');
+        let decoded;
+        try {
+            decoded = jwt.decode(token);
+            console.log('📋 Декодированный токен:', decoded);
+        } catch (error) {
+            console.log('❌ Ошибка декодирования:', error.message);
+        }
+        
+        // Проверяем подпись
+        let verified = false;
+        let verifyError = null;
+        try {
+            jwt.verify(token, process.env.JWT_SECRET);
+            verified = true;
+            console.log('✅ Токен верифицирован');
+        } catch (error) {
+            verifyError = error.message;
+            console.log('❌ Ошибка верификации:', error.message);
+        }
+        
+        res.json({
+            success: true,
+            debug: {
+                hasAuthHeader: !!authHeader,
+                tokenLength: token.length,
+                tokenStart: token.substring(0, 30) + '...',
+                decoded: decoded,
+                verified: verified,
+                verifyError: verifyError,
+                jwtSecretExists: !!process.env.JWT_SECRET,
+                jwtSecretLength: process.env.JWT_SECRET?.length
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Ошибка дебага:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// ТЕСТОВЫЙ ЭНДПОИНТ ДЛЯ ПРОВЕРКИ АУТЕНТИФИКАЦИИ
+app.get('/api/debug/auth-test', authMiddleware.authenticate, (req, res) => {
+    res.json({
+        success: true,
+        message: 'Аутентификация успешна!',
+        user: req.user,
+        timestamp: new Date().toISOString()
+    });
+});
+
 // ==================== 🔍 ПОИСК ПОЛЬЗОВАТЕЛЕЙ ====================
 app.get('/api/users/search', async (req, res) => {
     console.log('🎯 ОБРАБОТЧИК ПОИСКА ВЫЗВАН!');
