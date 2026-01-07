@@ -13,6 +13,7 @@ const authController = require('./src/controllers/authController');
 const moderationRoutes = require('./src/routes/moderation');
 const { initializeNotificationSocket } = require('./src/sockets/notificationSocket');
 const NotificationService = require('./src/services/NotificationService');
+const authMiddleware = require('./src/middleware/authMiddleware');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
@@ -125,7 +126,6 @@ app.use('/api/session', sessionRoutes);
 
 
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
-const authMiddleware = require('./src/middleware/authMiddleware');
 app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
 app.use('/api/call', authMiddleware.authenticate, callRoutes);
 app.use('/api/message', authMiddleware.authenticate, messageRoutes);

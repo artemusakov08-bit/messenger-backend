@@ -1,303 +1,216 @@
 const jwt = require('jsonwebtoken');
 const db = require('../config/database');
-const RolePermissionService = require('../services/auth/RolePermissionService');
 
-class AuthMiddleware {
-  async authenticate(req, res, next) {
-    try {
-      const authHeader = req.headers['authorization'] || req.headers['Authorization'];
-      
-      if (!authHeader) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Требуется авторизация',
-          code: 'NO_AUTH_HEADER'
-        });
-      }
-      
-      let accessToken;
-      if (authHeader.startsWith('Bearer ')) {
-        accessToken = authHeader.substring(7);
-      } else {
-        accessToken = authHeader;
-      }
-      
-      if (!accessToken) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Токен не предоставлен',
-          code: 'NO_TOKEN'
-        });
-      }
-      
-      if (!process.env.JWT_SECRET) {
-        return res.status(500).json({ 
-          success: false,
-          error: 'Ошибка конфигурации сервера',
-          code: 'JWT_SECRET_MISSING'
-        });
-      }
-      
-      let decoded;
-      try {
-        decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
-      } catch (jwtError) {
-        if (jwtError.name === 'TokenExpiredError') {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Токен истек',
-            code: 'TOKEN_EXPIRED',
-            requiresRefresh: true
-          });
+const authMiddleware = {
+    authenticate: async (req, res, next) => {
+        try {
+            console.log('🔐 === НАЧАЛО АУТЕНТИФИКАЦИИ ===');
+            
+            const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+            console.log('📨 Заголовок Authorization:', authHeader ? 'есть' : 'нет');
+            
+            if (!authHeader) {
+                console.log('❌ Нет заголовка Authorization');
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Требуется авторизация. Добавьте: Authorization: Bearer <token>' 
+                });
+            }
+            
+            let token;
+            if (authHeader.startsWith('Bearer ')) {
+                token = authHeader.substring(7);
+            } else {
+                token = authHeader;
+            }
+            
+            console.log('🔑 Токен получен, длина:', token.length);
+            
+            if (!process.env.JWT_SECRET) {
+                console.error('❌ JWT_SECRET не установлен');
+                return res.status(500).json({ 
+                    success: false,
+                    error: 'Ошибка сервера' 
+                });
+            }
+            
+            // Декодируем без проверки сначала
+            let decoded;
+            try {
+                decoded = jwt.decode(token);
+                console.log('📋 Декодированный токен:', decoded);
+            } catch (decodeError) {
+                console.error('❌ Ошибка декодирования токена:', decodeError);
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Неверный формат токена' 
+                });
+            }
+            
+            if (!decoded || !decoded.userId) {
+                console.error('❌ Токен не содержит userId');
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Неверный токен' 
+                });
+            }
+            
+            // Проверяем подпись токена
+            try {
+                jwt.verify(token, process.env.JWT_SECRET);
+                console.log('✅ Токен верифицирован');
+            } catch (verifyError) {
+                console.error('❌ Ошибка верификации токена:', verifyError.message);
+                
+                if (verifyError.name === 'TokenExpiredError') {
+                    return res.status(401).json({ 
+                        success: false,
+                        error: 'Токен истек',
+                        requiresRefresh: true
+                    });
+                }
+                
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Неверный токен' 
+                });
+            }
+            
+            const { userId } = decoded;
+            
+            // ИЩЕМ ПОЛЬЗОВАТЕЛЯ В БАЗЕ
+            const client = await db.getClient();
+            try {
+                console.log('🔍 Поиск пользователя:', userId);
+                
+                const userResult = await client.query(
+                    'SELECT user_id, username, display_name, phone, role, status FROM users WHERE user_id = $1',
+                    [userId]
+                );
+                
+                if (userResult.rows.length === 0) {
+                    console.log('❌ Пользователь не найден в БД:', userId);
+                    return res.status(404).json({ 
+                        success: false,
+                        error: 'Пользователь не найден' 
+                    });
+                }
+                
+                const user = userResult.rows[0];
+                console.log('✅ Пользователь найден:', user.user_id);
+                
+                // ПРОВЕРЯЕМ СЕССИЮ В БАЗЕ
+                console.log('🔍 Поиск активной сессии для пользователя');
+                const sessionResult = await client.query(
+                    `SELECT * FROM sessions 
+                     WHERE user_id = $1 
+                     AND is_active = true 
+                     AND access_token_expires_at > NOW()
+                     ORDER BY last_active_at DESC 
+                     LIMIT 1`,
+                    [userId]
+                );
+                
+                if (sessionResult.rows.length === 0) {
+                    console.log('⚠️ Активная сессия не найдена, проверяем любую сессию');
+                    
+                    // Проверяем любую сессию пользователя
+                    const anySessionResult = await client.query(
+                        'SELECT * FROM sessions WHERE user_id = $1 ORDER BY last_active_at DESC LIMIT 1',
+                        [userId]
+                    );
+                    
+                    if (anySessionResult.rows.length > 0) {
+                        const session = anySessionResult.rows[0];
+                        if (!session.is_active) {
+                            console.log('❌ Сессия неактивна');
+                            return res.status(401).json({ 
+                                success: false,
+                                error: 'Сессия неактивна' 
+                            });
+                        }
+                        
+                        if (new Date() > new Date(session.access_token_expires_at)) {
+                            console.log('❌ Токен сессии истек');
+                            return res.status(401).json({ 
+                                success: false,
+                                error: 'Токен истек',
+                                requiresRefresh: true
+                            });
+                        }
+                    } else {
+                        console.log('❌ Сессий не найдено');
+                        return res.status(401).json({ 
+                            success: false,
+                            error: 'Сессия не найдена' 
+                        });
+                    }
+                }
+                
+                // Обновляем активность
+                await client.query(
+                    'UPDATE users SET last_seen = $1 WHERE user_id = $2',
+                    [Date.now(), userId]
+                );
+                
+                req.user = {
+                    userId: user.user_id,
+                    username: user.username,
+                    displayName: user.display_name,
+                    phone: user.phone,
+                    role: user.role,
+                    status: user.status
+                };
+                
+                req.userId = user.user_id;
+                
+                console.log('✅ Аутентификация успешна для:', user.user_id);
+                console.log('👤 Данные пользователя:', {
+                    id: user.user_id,
+                    username: user.username,
+                    role: user.role
+                });
+                
+                next();
+            } finally {
+                client.release();
+            }
+            
+        } catch (error) {
+            console.error('❌ КРИТИЧЕСКАЯ ОШИБКА АУТЕНТИФИКАЦИИ:', error);
+            console.error('Stack:', error.stack);
+            
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка сервера при аутентификации',
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
+            });
         }
-        
-        if (jwtError.name === 'JsonWebTokenError') {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Неверный токен',
-            code: 'INVALID_TOKEN'
-          });
-        }
-        
-        return res.status(401).json({ 
-          success: false,
-          error: 'Ошибка валидации токена',
-          code: 'TOKEN_VALIDATION_ERROR'
-        });
-      }
-      
-      const { userId, deviceId } = decoded;
-      
-      if (!userId || !deviceId) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Токен не содержит данных',
-          code: 'TOKEN_DATA_MISSING'
-        });
-      }
-      
-      const client = await db.getClient();
-      try {
-        const sessionResult = await client.query(
-          `SELECT s.*, u.username, u.display_name, u.phone, u.role, u.status, u.auth_level
-           FROM sessions s
-           JOIN users u ON s.user_id = u.user_id
-           WHERE s.user_id = $1 AND s.device_id = $2 AND s.is_active = true`,
-          [userId, deviceId]
-        );
-        
-        if (sessionResult.rows.length === 0) {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Сессия не найдена',
-            code: 'SESSION_NOT_FOUND',
-            sessionExpired: true
-          });
-        }
-        
-        const session = sessionResult.rows[0];
-        const user = {
-          userId: session.user_id,
-          username: session.username,
-          displayName: session.display_name,
-          phone: session.phone,
-          role: session.role,
-          status: session.status,
-          authLevel: session.auth_level
+    },
+    
+    requireRole: (roles) => {
+        return (req, res, next) => {
+            if (!req.user) {
+                return res.status(401).json({ 
+                    success: false,
+                    error: 'Требуется аутентификация' 
+                });
+            }
+            
+            if (!Array.isArray(roles)) {
+                roles = [roles];
+            }
+            
+            if (!roles.includes(req.user.role)) {
+                return res.status(403).json({ 
+                    success: false,
+                    error: 'Недостаточно прав' 
+                });
+            }
+            
+            next();
         };
-        
-        if (session.access_token !== accessToken) {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Токен не соответствует сессии',
-            code: 'TOKEN_MISMATCH',
-            requiresRefresh: true
-          });
-        }
-        
-        const now = new Date();
-        const tokenExpiresAt = new Date(session.access_token_expires_at);
-        
-        if (now > tokenExpiresAt) {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Токен истек',
-            code: 'ACCESS_TOKEN_EXPIRED',
-            requiresRefresh: true,
-            expiresAt: tokenExpiresAt
-          });
-        }
-        
-        const refreshExpiresAt = new Date(session.refresh_token_expires_at);
-        if (now > refreshExpiresAt) {
-          await client.query(
-            'UPDATE sessions SET is_active = false WHERE session_id = $1',
-            [session.session_id]
-          );
-          
-          return res.status(401).json({ 
-            success: false,
-            error: 'Сессия истекла',
-            code: 'SESSION_EXPIRED',
-            sessionExpired: true
-          });
-        }
-        
-        await client.query(
-          'UPDATE sessions SET last_active_at = NOW() WHERE session_id = $1',
-          [session.session_id]
-        );
-        
-        req.user = user;
-        req.session = {
-          sessionId: session.session_id,
-          deviceId: session.device_id,
-          deviceName: session.device_name,
-          os: session.os,
-          accessToken: session.access_token,
-          refreshToken: session.refresh_token,
-          accessTokenExpiresAt: session.access_token_expires_at,
-          refreshTokenExpiresAt: session.refresh_token_expires_at,
-          ipAddress: session.ip_address,
-          location: session.location ? JSON.parse(session.location) : null,
-          lastActiveAt: session.last_active_at,
-          isActive: session.is_active
-        };
-        
-        req.userId = user.userId;
-        req.deviceId = deviceId;
-        
-        next();
-      } finally {
-        client.release();
-      }
-      
-    } catch (error) {
-      console.error('❌ ОШИБКА АУТЕНТИФИКАЦИИ:', error);
-      
-      if (error.code === 'ECONNREFUSED') {
-        return res.status(503).json({ 
-          success: false,
-          error: 'База данных недоступна',
-          code: 'DATABASE_UNAVAILABLE'
-        });
-      }
-      
-      res.status(500).json({ 
-        success: false,
-        error: 'Внутренняя ошибка сервера',
-        code: 'INTERNAL_SERVER_ERROR'
-      });
     }
-  }
+};
 
-  requireRole(roles) {
-    return (req, res, next) => {
-      if (!req.user) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Требуется аутентификация',
-          code: 'AUTH_REQUIRED'
-        });
-      }
-
-      if (!Array.isArray(roles)) {
-        roles = [roles];
-      }
-
-      if (!roles.includes(req.user.role)) {
-        return res.status(403).json({ 
-          success: false,
-          error: 'Недостаточно прав',
-          code: 'INSUFFICIENT_PERMISSIONS',
-          requiredRoles: roles,
-          currentRole: req.user.role
-        });
-      }
-
-      next();
-    };
-  }
-
-  requirePermission(permission) {
-    return async (req, res, next) => {
-      if (!req.user) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Требуется аутентификация',
-          code: 'AUTH_REQUIRED'
-        });
-      }
-
-      try {
-        const hasPermission = await RolePermissionService.hasPermission(req.user.role, permission);
-        
-        if (!hasPermission) {
-          return res.status(403).json({ 
-            success: false,
-            error: 'Недостаточно прав',
-            code: 'INSUFFICIENT_PERMISSIONS',
-            requiredPermission: permission,
-            currentRole: req.user.role
-          });
-        }
-
-        next();
-      } catch (error) {
-        console.error('❌ Ошибка проверки прав:', error);
-        res.status(500).json({ 
-          success: false,
-          error: 'Ошибка проверки прав',
-          code: 'PERMISSION_CHECK_ERROR'
-        });
-      }
-    };
-  }
-
-  async validateDeviceSession(req, res, next) {
-    try {
-      if (!req.user || !req.session) {
-        return res.status(401).json({ 
-          success: false,
-          error: 'Требуется аутентификация',
-          code: 'AUTH_REQUIRED'
-        });
-      }
-      
-      const { userId } = req.user;
-      const { deviceId } = req.session;
-      
-      const client = await db.getClient();
-      
-      try {
-        const sessionCheck = await client.query(
-          'SELECT is_active FROM sessions WHERE user_id = $1 AND device_id = $2',
-          [userId, deviceId]
-        );
-        
-        if (sessionCheck.rows.length === 0 || !sessionCheck.rows[0].is_active) {
-          return res.status(401).json({ 
-            success: false,
-            error: 'Сессия устройства неактивна',
-            code: 'DEVICE_SESSION_INACTIVE',
-            sessionTerminated: true
-          });
-        }
-        
-        next();
-      } finally {
-        client.release();
-      }
-      
-    } catch (error) {
-      console.error('❌ Ошибка проверки сессии устройства:', error);
-      res.status(500).json({ 
-        success: false,
-        error: 'Ошибка проверки устройства',
-        code: 'DEVICE_VALIDATION_ERROR'
-      });
-    }
-  }
-}
-
-module.exports = new AuthMiddleware();
+module.exports = authMiddleware;
