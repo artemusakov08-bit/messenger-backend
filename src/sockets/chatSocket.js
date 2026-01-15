@@ -1,6 +1,7 @@
 const WebSocket = require('ws');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
+const SessionService = require('../services/sessionService');
 
 class ChatSocket {
     constructor(wss) {
@@ -20,10 +21,11 @@ class ChatSocket {
             
             let userId = null;
             let userChats = new Set();
+            let isAuthenticated = false;
             
             // Устанавливаем таймаут на аутентификацию
             const authTimeout = setTimeout(() => {
-                if (!userId) {
+                if (!isAuthenticated) {
                     console.log('⏰ Таймаут аутентификации');
                     ws.close(1008, 'Authentication timeout');
                 }
@@ -40,41 +42,78 @@ class ChatSocket {
                     switch (message.type) {
                         case 'authenticate':
                             clearTimeout(authTimeout);
-                            userId = await this.handleAuthentication(ws, message.token);
-                            if (userId) {
-                                userChats = await this.loadUserChats(userId);
-                                this.subscribeToUserChats(userId, userChats, ws);
+                            const authResult = await this.handleAuthentication(ws, message.token);
+                            if (authResult.userId) {
+                                userId = authResult.userId;
+                                isAuthenticated = authResult.authenticated;
+                                if (isAuthenticated) {
+                                    userChats = await this.loadUserChats(userId);
+                                    this.subscribeToUserChats(userId, userChats, ws);
+                                }
+                            }
+                            break;
+                            
+                        case 'refresh_token':
+                            console.log('🔄 Запрос обновления токена через WS');
+                            await this.handleTokenRefresh(ws, message.refreshToken, message.ip);
+                            break;
+                            
+                        case 'reauthenticate':
+                            console.log('🔐 Повторная аутентификация через WS');
+                            if (message.accessToken) {
+                                const authResult = await this.handleAuthentication(ws, message.accessToken);
+                                if (authResult.userId && authResult.authenticated) {
+                                    userId = authResult.userId;
+                                    isAuthenticated = true;
+                                    ws.send(JSON.stringify({
+                                        type: 'reauthenticated',
+                                        userId: userId,
+                                        timestamp: Date.now()
+                                    }));
+                                }
                             }
                             break;
                             
                         case 'join_chat':
-                            if (userId) {
+                            if (userId && isAuthenticated) {
                                 await this.handleJoinChat(userId, message.chatId, ws);
                                 userChats.add(message.chatId);
+                            } else if (userId && !isAuthenticated) {
+                                this.sendError(ws, 'Требуется повторная аутентификация. Токен истек.', 'TOKEN_EXPIRED');
+                            } else {
+                                this.sendError(ws, 'Требуется аутентификация', 'AUTH_REQUIRED');
                             }
                             break;
                             
                         case 'leave_chat':
-                            if (userId) {
+                            if (userId && isAuthenticated) {
                                 this.handleLeaveChat(userId, message.chatId, ws);
                                 userChats.delete(message.chatId);
                             }
                             break;
                             
                         case 'send_message':
-                            if (userId) {
+                            if (userId && isAuthenticated) {
                                 await this.handleSendMessage(userId, message);
+                            } else if (userId && !isAuthenticated) {
+                                this.sendToUser(userId, {
+                                    type: 'message_error',
+                                    error: 'Токен истек. Обновите токен и отправьте сообщение снова.',
+                                    code: 'TOKEN_EXPIRED',
+                                    originalMessage: message,
+                                    timestamp: Date.now()
+                                });
                             }
                             break;
                             
                         case 'typing':
-                            if (userId && message.chatId) {
+                            if (userId && isAuthenticated && message.chatId) {
                                 this.handleTyping(userId, message.chatId, message.isTyping);
                             }
                             break;
                             
                         case 'message_read':
-                            if (userId && message.messageId && message.chatId) {
+                            if (userId && isAuthenticated && message.messageId && message.chatId) {
                                 await this.handleMessageRead(userId, message.messageId, message.chatId);
                             }
                             break;
@@ -83,7 +122,8 @@ class ChatSocket {
                             ws.send(JSON.stringify({ 
                                 type: 'pong', 
                                 timestamp: Date.now(),
-                                userId 
+                                userId,
+                                isAuthenticated 
                             }));
                             break;
                             
@@ -103,9 +143,10 @@ class ChatSocket {
             ws.on('close', (code, reason) => {
                 console.log(`🔌 Закрыто соединение ${userId ? `для ${userId}` : 'anonymous'}`, {
                     code,
-                    reason: reason.toString()
+                    reason: reason.toString(),
+                    authenticated: isAuthenticated
                 });
-                if (userId) {
+                if (userId && isAuthenticated) {
                     this.handleDisconnect(userId, ws);
                 }
                 clearTimeout(authTimeout);
@@ -118,9 +159,43 @@ class ChatSocket {
         });
     }
 
+    // ОБНОВЛЕННЫЙ МЕТОД АУТЕНТИФИКАЦИИ
     async handleAuthentication(ws, token) {
         try {
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            console.log('🔐 Проверка токена...');
+            
+            let decoded;
+            let isExpired = false;
+            
+            try {
+                // Пробуем проверить токен
+                decoded = jwt.verify(token, process.env.JWT_SECRET);
+            } catch (error) {
+                if (error.name === 'TokenExpiredError') {
+                    console.log('⚠️ Токен истек, но декодируем для получения userId');
+                    isExpired = true;
+                    // Декодируем без проверки, чтобы получить userId
+                    decoded = jwt.decode(token);
+                    
+                    if (!decoded || !decoded.userId) {
+                        throw new Error('Не удалось декодировать истекший токен');
+                    }
+                    
+                    // Отправляем клиенту уведомление об истечении токена
+                    ws.send(JSON.stringify({
+                        type: 'token_expired',
+                        message: 'Access token expired',
+                        error: 'TokenExpiredError',
+                        needsRefresh: true,
+                        userId: decoded.userId,
+                        timestamp: Date.now()
+                    }));
+                } else {
+                    // Другие ошибки (неверный токен и т.д.)
+                    throw error;
+                }
+            }
+            
             const userId = decoded.userId;
             
             if (!userId) {
@@ -134,33 +209,116 @@ class ChatSocket {
                 throw new Error('Invalid user ID format');
             }
             
-            // Добавляем соединение для пользователя
+            if (isExpired) {
+                // Если токен истек, сохраняем соединение, но отмечаем как неаутентифицированное
+                console.log(`⚠️ Пользователь ${numericUserId} с истекшим токеном`);
+                
+                // Добавляем соединение, но не аутентифицируем
+                if (!this.userConnections.has(numericUserId)) {
+                    this.userConnections.set(numericUserId, new Set());
+                }
+                this.userConnections.get(numericUserId).add(ws);
+                
+                ws.userId = numericUserId;
+                ws.isAuthenticated = false;
+                
+                return {
+                    userId: numericUserId,
+                    authenticated: false,
+                    expired: true
+                };
+            }
+            
+            // Токен валидный - полная аутентификация
             if (!this.userConnections.has(numericUserId)) {
                 this.userConnections.set(numericUserId, new Set());
             }
             this.userConnections.get(numericUserId).add(ws);
             
-            // Сохраняем ID в объекте WebSocket
             ws.userId = numericUserId;
+            ws.isAuthenticated = true;
             
             console.log(`✅ Аутентифицирован пользователь: ${numericUserId}`);
             
             ws.send(JSON.stringify({
                 type: 'authenticated',
                 userId: numericUserId,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                message: 'Аутентификация успешна'
             }));
             
-            return numericUserId;
+            return {
+                userId: numericUserId,
+                authenticated: true,
+                expired: false
+            };
             
         } catch (error) {
             console.error('❌ Ошибка аутентификации:', error.message);
+            
+            if (error.name === 'TokenExpiredError') {
+                ws.send(JSON.stringify({
+                    type: 'auth_error',
+                    message: 'Токен истек',
+                    error: error.name,
+                    needsRefresh: true
+                }));
+            } else {
+                ws.send(JSON.stringify({
+                    type: 'auth_error',
+                    message: error.message,
+                    needsRefresh: false
+                }));
+                ws.close(1008, 'Authentication failed');
+            }
+            
+            return {
+                userId: null,
+                authenticated: false,
+                expired: false
+            };
+        }
+    }
+
+    // НОВЫЙ МЕТОД: ОБРАБОТКА ОБНОВЛЕНИЯ ТОКЕНА ЧЕРЕЗ WS
+    async handleTokenRefresh(ws, refreshToken, clientIp = '0.0.0.0') {
+        try {
+            console.log('🔄 Обновление токена через WebSocket...');
+            
+            if (!refreshToken) {
+                throw new Error('Refresh token не предоставлен');
+            }
+            
+            // Используем SessionService для обновления токенов
+            const result = await SessionService.refreshUserTokens(refreshToken, clientIp);
+            
+            console.log('✅ Токены обновлены через WS');
+            
+            // Отправляем новые токены клиенту
             ws.send(JSON.stringify({
-                type: 'auth_error',
-                message: error.message
+                type: 'tokens_refreshed',
+                accessToken: result.accessToken,
+                refreshToken: result.refreshToken,
+                sessionToken: result.sessionToken,
+                accessTokenExpiresIn: result.accessTokenExpiresIn,
+                timestamp: Date.now(),
+                message: 'Токены успешно обновлены'
             }));
-            ws.close(1008, 'Authentication failed');
-            return null;
+            
+            return result;
+            
+        } catch (error) {
+            console.error('❌ Ошибка обновления токена через WS:', error);
+            
+            ws.send(JSON.stringify({
+                type: 'refresh_error',
+                error: error.message,
+                code: error.code || 'REFRESH_FAILED',
+                timestamp: Date.now(),
+                message: 'Не удалось обновить токен'
+            }));
+            
+            throw error;
         }
     }
 
@@ -606,12 +764,13 @@ class ChatSocket {
         }
     }
 
-    sendError(ws, message) {
+    sendError(ws, message, code = 'WS_ERROR') {
         try {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({
                     type: 'error',
                     message,
+                    code,
                     timestamp: Date.now()
                 }));
             }
