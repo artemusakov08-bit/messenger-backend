@@ -1,4 +1,3 @@
-// src/services/SyncService.js
 const NotificationService = require('./NotificationService');
 
 class SyncService {
@@ -6,7 +5,7 @@ class SyncService {
         this.io = io;
         this.notificationService = new NotificationService(io);
         this.userStates = new Map();
-        this.messageQueues = new Map(); // userId -> Map(deviceId -> [messages])
+        this.messageQueues = new Map(); 
         this.initialize();
     }
 
