@@ -1,5 +1,5 @@
 // src/services/SyncService.js
-const NotificationService = require('./NotificationsService');
+const NotificationService = require('./NotificationService');
 
 class SyncService {
     constructor(io) {
