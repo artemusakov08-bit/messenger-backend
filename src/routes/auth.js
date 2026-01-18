@@ -54,22 +54,22 @@ router.post('/refresh-token', (req, res) => {
 });
 
 // 📋 Получение активных сессий (требует авторизацию)
-router.get('/sessions', deviceAuthMiddleware.authenticateDevice, (req, res) => {
+router.get('/sessions', deviceAuthMiddleware.authenticate, (req, res) => {
     authController.getSessions(req, res);
 });
 
 // 🚪 Выход из текущей сессии
-router.post('/logout', deviceAuthMiddleware.authenticateDevice, (req, res) => {
+router.post('/logout', deviceAuthMiddleware.authenticate, (req, res) => { 
     authController.logout(req, res);
 });
 
 // 🚫 Завершение конкретной сессии
-router.delete('/sessions/:sessionId', deviceAuthMiddleware.authenticateDevice, (req, res) => {
+router.delete('/sessions/:sessionId', deviceAuthMiddleware.authenticate, (req, res) => {  
     authController.endSession(req, res);
 });
 
 // 🚫 Завершение всех других сессий
-router.delete('/sessions', deviceAuthMiddleware.authenticateDevice, (req, res) => {
+router.delete('/sessions', deviceAuthMiddleware.authenticate, (req, res) => {  
     authController.endAllSessions(req, res);
 });
 
