@@ -2,7 +2,7 @@ const speakeasy = require('speakeasy');
 const QRCode = require('qrcode');
 const UserSecurity = require('../models/UserSecurity');
 const SessionService = require('../services/sessionService');
-const NotificationService = require('../services/NotificationsService');
+const NotificationService = require('../services/NotificationService');
 const SecurityUtils = require('../utils/securityUtils');
 const db = require('../config/database');
 
