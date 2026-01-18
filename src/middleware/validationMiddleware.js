@@ -243,6 +243,23 @@ class ValidationMiddleware {
     };
   }
 
+  // 🗣️ Валидация кодового слова
+  validateCodeWord() {
+    return [
+      body('codeWord')
+        .trim()
+        .notEmpty().withMessage('Кодовое слово обязательно')
+        .isLength({ min: 4, max: 50 }).withMessage('Кодовое слово должно быть от 4 до 50 символов'),
+      
+      body('hint')
+        .optional()
+        .trim()
+        .isLength({ max: 100 }).withMessage('Подсказка не может быть длиннее 100 символов'),
+      
+      this.handleValidationErrors
+    ];
+  }
+
   // 🕒 Проверка временных меток
   validateTimestamps() {
     return [
