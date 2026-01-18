@@ -53,9 +53,11 @@ class JWTUtils {
   }
 
   // 🔍 Верификация access token
-  verifyAccessToken(token) {
-    try {
-      const decoded = jwt.verify(token, this.JWT_SECRET);
+verifyAccessToken(token) {
+  try {
+    const decoded = jwt.verify(token, this.JWT_SECRET, {
+      clockTolerance: 300 
+    });
       
       // Проверяем тип токена
       if (decoded.type !== 'access') {

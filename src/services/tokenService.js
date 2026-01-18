@@ -56,7 +56,9 @@ class TokenService {
   // 🔍 Валидация access token
   verifyAccessToken(token) {
     try {
-      const decoded = jwt.verify(token, this.JWT_SECRET);
+      const decoded = jwt.verify(token, this.JWT_SECRET, {
+        clockTolerance: 300 
+      });
       return { valid: true, decoded };
     } catch (error) {
       return { 
