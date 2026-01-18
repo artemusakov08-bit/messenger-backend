@@ -14,6 +14,7 @@ const moderationRoutes = require('./src/routes/moderation');
 const { initializeNotificationSocket } = require('./src/sockets/notificationSocket');
 const NotificationService = require('./src/services/NotificationService');
 const authMiddleware = require('./src/middleware/authMiddleware');
+const WebSocket = require('ws');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
