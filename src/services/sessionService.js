@@ -569,13 +569,13 @@ class SessionService {
   }
 
   // 👤 Обновление статуса пользователя
-  async updateUserStatus(userId, status) {
+async updateUserStatus(userId, status) {
     const db = require('../config/database');
     const client = await db.getClient();
     try {
       await client.query(
         'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-        [status, new Date(), userId]
+        [status, Date.now(), userId]  
       );
       
       // Уведомляем все устройства об изменении статуса
@@ -583,13 +583,13 @@ class SessionService {
         type: 'USER_STATUS_CHANGE',
         userId,
         status,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString() 
       });
       
     } finally {
       client.release();
     }
-  }
+}
 
   // 🚫 Пометить сессию неактивной если устройство долго оффлайн
   async markInactiveIfOfflineTooLong(session) {
