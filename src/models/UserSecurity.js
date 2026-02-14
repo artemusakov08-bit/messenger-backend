@@ -18,75 +18,72 @@ class UserSecurity {
 
     // Создать или обновить настройки безопасности
     static async createOrUpdate(userId, securityData = {}) {
-        try {
-            const existing = await this.findByUserId(userId);
-            
-            if (existing) {
-                const result = await db.query(
-                    `UPDATE user_security SET 
-                        two_fa_enabled = COALESCE($1, two_fa_enabled),
-                        two_fa_secret = COALESCE($2, two_fa_secret),
-                        code_word_enabled = COALESCE($3, code_word_enabled),
-                        code_word_hash = COALESCE($4, code_word_hash),
-                        code_word_hint = COALESCE($5, code_word_hint),
-                        security_level = COALESCE($6, security_level),
-                        additional_passwords = COALESCE($7, additional_passwords),
-                        trusted_devices = COALESCE($8, trusted_devices),
-                        login_history = COALESCE($9, login_history),
-                        failed_attempts = COALESCE($10, failed_attempts),
-                        last_security_update = $11,
-                        security_score = COALESCE($12, security_score)
-                     WHERE user_id = $13 RETURNING *`,
-                    [
-                        securityData.two_fa_enabled || false,
-                        securityData.two_fa_secret,
-                        securityData.code_word_enabled || false,
-                        securityData.code_word_hash,
-                        securityData.code_word_hint,
-                        securityData.security_level || 'low',
-                        securityData.additional_passwords ? JSON.stringify(securityData.additional_passwords) : '[]',
-                        securityData.trusted_devices ? JSON.stringify(securityData.trusted_devices) : '[]',
-                        securityData.login_history ? JSON.stringify(securityData.login_history) : '[]',
-                        securityData.failed_attempts || 0,
-                        Date.now(),
-                        securityData.security_score || 50,
-                        userId
-                    ]
-                );
-                return result.rows[0];
-            } else {
-                const securityId = 'sec_' + Date.now();
-                const result = await db.query(
-                    `INSERT INTO user_security (
-                        id, user_id, two_fa_enabled, two_fa_secret, 
-                        code_word_enabled, code_word_hash, code_word_hint,
-                        security_level, additional_passwords, trusted_devices,
-                        login_history, failed_attempts, last_security_update, security_score
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
-                    [
-                        securityId,
-                        userId,
-                        securityData.two_fa_enabled || false,
-                        securityData.two_fa_secret || null,
-                        securityData.code_word_enabled || false,
-                        securityData.code_word_hash || null,
-                        securityData.code_word_hint || '',
-                        securityData.security_level || 'low',
-                        securityData.additional_passwords ? JSON.stringify(securityData.additional_passwords) : '[]',
-                        securityData.trusted_devices ? JSON.stringify(securityData.trusted_devices) : '[]',
-                        securityData.login_history ? JSON.stringify(securityData.login_history) : '[]',
-                        securityData.failed_attempts || 0,
-                        Date.now(),
-                        securityData.security_score || 50
-                    ]
-                );
-                return result.rows[0];
-            }
-        } catch (error) {
-            console.error('❌ Error creating/updating user security:', error);
-            throw error;
+    try {
+        const existing = await this.findByUserId(userId);
+        
+        if (existing) {
+            const result = await db.query(
+                `UPDATE user_security SET 
+                    two_fa_enabled = COALESCE($1, two_fa_enabled),
+                    two_fa_secret = COALESCE($2, two_fa_secret),
+                    code_word_enabled = COALESCE($3, code_word_enabled),
+                    code_word_hash = COALESCE($4, code_word_hash),
+                    code_word_hint = COALESCE($5, code_word_hint),
+                    security_level = COALESCE($6, security_level),
+                    additional_passwords = COALESCE($7, additional_passwords),
+                    trusted_devices = COALESCE($8, trusted_devices),
+                    failed_attempts = COALESCE($9, failed_attempts),
+                    last_security_update = $10,
+                    security_score = COALESCE($11, security_score)
+                 WHERE user_id = $12 RETURNING *`,
+                [
+                    securityData.two_fa_enabled || false,
+                    securityData.two_fa_secret,
+                    securityData.code_word_enabled || false,
+                    securityData.code_word_hash,
+                    securityData.code_word_hint,
+                    securityData.security_level || 'low',
+                    securityData.additional_passwords ? JSON.stringify(securityData.additional_passwords) : '[]',
+                    securityData.trusted_devices ? JSON.stringify(securityData.trusted_devices) : '[]',
+                    securityData.failed_attempts || 0,
+                    Date.now(),
+                    securityData.security_score || 50,
+                    userId
+                ]
+            );
+            return result.rows[0];
+        } else {
+            const securityId = 'sec_' + Date.now();
+            const result = await db.query(
+                `INSERT INTO user_security (
+                    id, user_id, two_fa_enabled, two_fa_secret, 
+                    code_word_enabled, code_word_hash, code_word_hint,
+                    security_level, additional_passwords, trusted_devices,
+                    failed_attempts, last_security_update, security_score
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+                [
+                    securityId,
+                    userId,
+                    securityData.two_fa_enabled || false,
+                    securityData.two_fa_secret || null,
+                    securityData.code_word_enabled || false,
+                    securityData.code_word_hash || null,
+                    securityData.code_word_hint || '',
+                    securityData.security_level || 'low',
+                    securityData.additional_passwords ? JSON.stringify(securityData.additional_passwords) : '[]',
+                    securityData.trusted_devices ? JSON.stringify(securityData.trusted_devices) : '[]',
+                    securityData.failed_attempts || 0,
+                    Date.now(),
+                    securityData.security_score || 50
+                ]
+            );
+            return result.rows[0];
         }
+    } catch (error) {
+        console.error('❌ Error creating/updating user security:', error);
+        throw error;
     }
+}
 
     // Включить 2FA
     static async enable2FA(userId, secret) {

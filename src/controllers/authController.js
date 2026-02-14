@@ -134,7 +134,7 @@ class AuthController {
                 'UPDATE verification_codes SET is_used = true WHERE id = $1',
                 [verificationCode.id]
             );
-
+             
             // Ищем пользователя по нормализованному номеру
             const userResult = await client.query(
                 'SELECT * FROM users WHERE phone = $1',
