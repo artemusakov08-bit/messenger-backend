@@ -99,20 +99,26 @@ class Session {
 static async deactivateAllForDevice(userId, deviceId) {
   const client = await db.getClient();
   try {
-    const result = await client.query(
-      `UPDATE sessions SET is_active = false 
-       WHERE user_id = $1 AND device_id = $2 AND is_active = true
-       RETURNING session_id`,
+    // Сначала находим старую активную сессию
+    const existingSession = await client.query(
+      'SELECT session_id FROM sessions WHERE user_id = $1 AND device_id = $2 AND is_active = true',
       [userId, deviceId]
     );
     
-    if (result.rows.length > 0) {
-      console.log(`✅ Деактивировано ${result.rows.length} старых сессий для устройства ${deviceId}`);
+    if (existingSession.rows.length > 0) {
+      const oldSessionId = existingSession.rows[0].session_id;
+      
+      await client.query(
+        'DELETE FROM sessions WHERE session_id = $1',
+        [oldSessionId]
+      );
+      
+      console.log(`✅ Удалена старая сессия ${oldSessionId} для устройства ${deviceId}`);
     }
     
-    return result.rows.length;
+    return existingSession.rows.length;
   } catch (error) {
-    console.error('❌ Ошибка деактивации сессий:', error);
+    console.error('❌ Ошибка удаления старых сессий:', error);
     throw error;
   } finally {
     client.release();
