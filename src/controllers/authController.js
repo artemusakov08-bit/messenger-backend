@@ -131,7 +131,7 @@ class AuthController {
             
             // Помечаем код как использованный
             await client.query(
-                'UPDATE verification_codes SET is_used = true, used_at = NOW() WHERE id = $1',
+                'UPDATE verification_codes SET is_used = true WHERE id = $1',
                 [verificationCode.id]
             );
 
