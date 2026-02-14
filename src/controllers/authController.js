@@ -17,259 +17,237 @@ if (!JWT_SECRET) {
 console.log('✅ JWT_SECRET загружен');
 
 class AuthController {
-    // 📱 Отправка SMS кода
+    // 📱 Отправка SMS кода (ИСПРАВЛЕНО: нормализация номера)
     async sendVerificationCode(req, res) {
-    try {
-        let { phone, type = 'sms' } = req.body;
-        console.log('📱 Отправка кода для:', phone);
+        try {
+            let { phone, type = 'sms' } = req.body;
+            console.log('📱 Отправка кода для:', phone);
 
-        if (!phone) {
-            return res.status(400).json({ 
+            if (!phone) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Телефон обязателен',
+                    code: 'PHONE_REQUIRED'
+                });
+            }
+
+            // Нормализуем номер (убираем +)
+            const cleanPhone = phone.replace('+', '');
+            console.log('📱 Нормализованный номер:', cleanPhone);
+
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            
+            const client = await db.getClient();
+            try {
+                // Удаляем старые коды
+                await client.query(
+                    'DELETE FROM verification_codes WHERE phone = $1 AND created_at < NOW() - INTERVAL \'1 hour\'',
+                    [cleanPhone]
+                );
+
+                const codeId = 'code_' + Date.now();
+                const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+                
+                await client.query(
+                    `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at, is_used)
+                     VALUES ($1, $2, $3, $4, $5, NOW(), false)`,
+                    [codeId, cleanPhone, code, type, expiresAt]
+                );
+                
+                console.log('✅ Код сохранен в БД:', { phone: cleanPhone, code, expiresAt });
+                
+                // 🔥 ЗДЕСЬ ПОДКЛЮЧАЕМ РЕАЛЬНЫЙ СЕРВИС SMS
+                // await this.sendRealSMS(phone, code);
+                
+                res.json({
+                    success: true,
+                    message: 'Код подтверждения отправлен',
+                    code: code, // Для тестирования
+                    expiresIn: 10
+                });
+            } finally {
+                client.release();
+            }
+
+        } catch (error) {
+            console.error('❌ Ошибка отправки кода:', error);
+            res.status(500).json({ 
                 success: false,
-                error: 'Телефон обязателен',
-                code: 'PHONE_REQUIRED'
+                error: 'Ошибка отправки кода: ' + error.message,
+                code: 'SEND_CODE_ERROR'
             });
         }
+    }
 
-        // 🔥 НОРМАЛИЗУЕМ НОМЕР — убираем +
-        const cleanPhone = phone.replace('+', '');
-        console.log('📱 Нормализованный номер:', cleanPhone);
-
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        
+    // 🔐 Проверка кода и создание сессии (ИСПРАВЛЕНО: нормализация номера)
+    async verifyCodeAndLogin(req, res) {
         const client = await db.getClient();
         try {
-            // Удаляем старые коды
-            await client.query(
-                'DELETE FROM verification_codes WHERE phone = $1',
-                [cleanPhone]  // ← используем cleanPhone
+            console.log('🔐 === НАЧАЛО ЛОГИНА ===');
+            let { phone, code, type = 'sms', deviceId, deviceInfo = {} } = req.body;
+            
+            // Нормализуем номер
+            const cleanPhone = phone.replace('+', '');
+            console.log('📱 Данные:', { 
+                originalPhone: phone,
+                cleanPhone: cleanPhone, 
+                code, 
+                type, 
+                deviceId 
+            });
+
+            if (!cleanPhone || !code) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Телефон и код обязательны',
+                    code: 'PHONE_CODE_REQUIRED'
+                });
+            }
+
+            if (!deviceId) {
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'ID устройства обязателен',
+                    code: 'DEVICE_ID_REQUIRED'
+                });
+            }
+
+            // Проверяем код по нормализованному номеру
+            const codeResult = await client.query(
+                'SELECT * FROM verification_codes WHERE phone = $1 AND code = $2 AND is_used = false AND expires_at > NOW()',
+                [cleanPhone, code]
             );
 
-            const codeId = 'code_' + Date.now();
-            const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+            if (codeResult.rows.length === 0) {
+                console.log('❌ Код не найден или истек для:', cleanPhone);
+                return res.status(400).json({ 
+                    success: false,
+                    error: 'Неверный код подтверждения',
+                    code: 'INVALID_CODE'
+                });
+            }
+
+            const verificationCode = codeResult.rows[0];
             
+            // Помечаем код как использованный
             await client.query(
-                `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at, is_used)
-                 VALUES ($1, $2, $3, $4, $5, NOW(), false)`,
-                [codeId, cleanPhone, code, type, expiresAt]  // ← cleanPhone
+                'UPDATE verification_codes SET is_used = true, used_at = NOW() WHERE id = $1',
+                [verificationCode.id]
+            );
+
+            // Ищем пользователя по нормализованному номеру
+            const userResult = await client.query(
+                'SELECT * FROM users WHERE phone = $1',
+                [cleanPhone]
             );
             
-            console.log('✅ Код сохранен в БД:', { phone: cleanPhone, code, expiresAt });
+            let user;
             
-            // Для тестирования возвращаем код
+            if (userResult.rows.length === 0) {
+                // Автоматическая регистрация
+                const userId = 'user_' + Date.now();
+                const username = 'user_' + cleanPhone.slice(-6);
+                const displayName = 'User ' + cleanPhone.slice(-4);
+                
+                const newUserResult = await client.query(
+                    `INSERT INTO users (
+                        user_id, phone, username, display_name, 
+                        role, is_premium, is_banned, warnings, auth_level,
+                        status, last_seen
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+                    [
+                        userId, 
+                        cleanPhone,
+                        username,
+                        displayName,
+                        'user',
+                        false,
+                        false,
+                        0,
+                        'sms_only',
+                        'online',
+                        Date.now()
+                    ]
+                );
+                
+                user = newUserResult.rows[0];
+                
+                // Создаем security запись
+                await UserSecurity.createOrUpdate(user.user_id);
+                
+                console.log('🆕 Создан новый пользователь:', user.user_id);
+            } else {
+                user = userResult.rows[0];
+                
+                // Обновляем статус
+                await client.query(
+                    'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+                    ['online', Date.now(), user.user_id]
+                );
+            }
+
+            // СОЗДАЕМ ПОЛНУЮ СЕССИЮ ЧЕРЕЗ СЕРВИС
+            const sessionResult = await SessionService.createUserSession(
+                {
+                    userId: user.user_id,
+                    phone: user.phone,
+                    username: user.username,
+                    displayName: user.display_name
+                },
+                {
+                    deviceId,
+                    deviceName: deviceInfo.deviceName || 'Android Device',
+                    os: deviceInfo.os || 'Android',
+                    deviceInfo
+                },
+                req.ip
+            );
+
+            const securityResult = await client.query(
+                'SELECT * FROM user_security WHERE user_id = $1',
+                [user.user_id]
+            );
+            const securitySettings = securityResult.rows[0];
+
+            console.log('✅ Логин успешен:', { 
+                userId: user.user_id, 
+                deviceId,
+                sessionId: sessionResult.session.id 
+            });
+
             res.json({
                 success: true,
-                message: 'Код подтверждения отправлен',
-                code: code,
-                expiresIn: 10
+                session: sessionResult.session,
+                tokens: sessionResult.tokens,
+                user: {
+                    id: user.user_id,
+                    phone: user.phone,
+                    username: user.username,
+                    displayName: user.display_name,
+                    role: user.role,
+                    is_premium: user.is_premium,
+                    status: 'online'
+                },
+                security: {
+                    twoFAEnabled: securitySettings?.two_fa_enabled || false,
+                    codeWordEnabled: securitySettings?.code_word_enabled || false,
+                    securityLevel: securitySettings?.security_level || 'low'
+                }
             });
-            
+
+        } catch (error) {
+            console.error('❌ Ошибка входа:', error);
+            res.status(500).json({ 
+                success: false,
+                error: 'Ошибка входа: ' + error.message,
+                code: 'LOGIN_ERROR'
+            });
         } finally {
             client.release();
         }
-
-    } catch (error) {
-        console.error('❌ Ошибка отправки кода:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка отправки кода: ' + error.message,
-            code: 'SEND_CODE_ERROR'
-        });
     }
-}
-}
 
-    // 🔐 Проверка кода и создание сессии =
-   // 🔐 Проверка кода и создание сессии (ОБНОВЛЕННЫЙ)
-const verifyCodeAndLogin = async (req, res) => {
-    const client = await db.getClient();
-    try {
-        console.log('🔐 === НАЧАЛО ЛОГИНА ===');
-        let { phone, code, type = 'sms', deviceId, deviceInfo = {} } = req.body;
-        
-        // НОРМАЛИЗУЕМ ТЕЛЕФОН - убираем +
-        const cleanPhone = phone.replace('+', '');
-        console.log('📱 Данные:', { 
-            originalPhone: phone,
-            cleanPhone: cleanPhone, 
-            code, 
-            type, 
-            deviceId 
-        });
-
-        if (!cleanPhone || !code) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'Телефон и код обязательны',
-                code: 'PHONE_CODE_REQUIRED'
-            });
-        }
-
-        if (!deviceId) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'ID устройства обязателен',
-                code: 'DEVICE_ID_REQUIRED'
-            });
-        }
-
-        // Проверяем код по нормализованному номеру
-        const codeResult = await client.query(
-            'SELECT * FROM verification_codes WHERE phone = $1 AND code = $2 AND is_used = false AND expires_at > NOW()',
-            [cleanPhone, code]
-        );
-
-        if (codeResult.rows.length === 0) {
-            console.log('❌ Код не найден или истек для:', cleanPhone);
-            
-            // Для отладки: проверим, есть ли вообще коды для этого номера
-            const allCodes = await client.query(
-                'SELECT * FROM verification_codes WHERE phone = $1 ORDER BY created_at DESC',
-                [cleanPhone]
-            );
-            console.log('📊 Все коды для номера:', allCodes.rows.map(c => ({
-                code: c.code,
-                expires: c.expires_at,
-                used: c.is_used,
-                created: c.created_at
-            })));
-            
-            return res.status(400).json({ 
-                success: false,
-                error: 'Неверный код подтверждения',
-                code: 'INVALID_CODE'
-            });
-        }
-
-        const verificationCode = codeResult.rows[0];
-        console.log('✅ Код найден:', { 
-            codeId: verificationCode.id,
-            expiresAt: verificationCode.expires_at 
-        });
-        
-        // Помечаем код как использованный
-        await client.query(
-            'UPDATE verification_codes SET is_used = true, used_at = NOW() WHERE id = $1',
-            [verificationCode.id]
-        );
-
-        // Ищем пользователя по нормализованному номеру
-        const userResult = await client.query(
-            'SELECT * FROM users WHERE phone = $1',
-            [cleanPhone]
-        );
-        
-        let user;
-        
-        if (userResult.rows.length === 0) {
-            // Автоматическая регистрация
-            const userId = 'user_' + Date.now();
-            const username = 'user_' + cleanPhone.slice(-6);
-            const displayName = 'User ' + cleanPhone.slice(-4);
-            
-            const newUserResult = await client.query(
-                `INSERT INTO users (
-                    user_id, phone, username, display_name, 
-                    role, is_premium, is_banned, warnings, auth_level,
-                    status, last_seen
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-                [
-                    userId, 
-                    cleanPhone,
-                    username,
-                    displayName,
-                    'user',
-                    false,
-                    false,
-                    0,
-                    'sms_only',
-                    'online',
-                    Date.now()
-                ]
-            );
-            
-            user = newUserResult.rows[0];
-            
-            // Создаем security запись
-            await client.query(
-                `INSERT INTO user_security (user_id, two_fa_enabled, code_word_enabled, security_level)
-                 VALUES ($1, false, false, 'low')`,
-                [userId]
-            );
-            
-            console.log('🆕 Создан новый пользователь:', user.user_id);
-        } else {
-            user = userResult.rows[0];
-            
-            // Обновляем статус
-            await client.query(
-                'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-                ['online', Date.now(), user.user_id]
-            );
-        }
-
-        // СОЗДАЕМ ПОЛНУЮ СЕССИЮ ЧЕРЕЗ СЕРВИС
-        const sessionResult = await SessionService.createUserSession(
-            {
-                userId: user.user_id,
-                phone: user.phone,
-                username: user.username,
-                displayName: user.display_name
-            },
-            {
-                deviceId,
-                deviceName: deviceInfo.deviceName || 'Android Device',
-                os: deviceInfo.os || 'Android',
-                deviceInfo
-            },
-            req.ip
-        );
-
-        const securityResult = await client.query(
-            'SELECT * FROM user_security WHERE user_id = $1',
-            [user.user_id]
-        );
-        const securitySettings = securityResult.rows[0] || {};
-
-        console.log('✅ Логин успешен:', { 
-            userId: user.user_id, 
-            deviceId,
-            sessionId: sessionResult.session.id 
-        });
-
-        res.json({
-            success: true,
-            session: sessionResult.session,
-            tokens: sessionResult.tokens,
-            user: {
-                id: user.user_id,
-                phone: user.phone,
-                username: user.username,
-                displayName: user.display_name,
-                role: user.role,
-                is_premium: user.is_premium,
-                status: 'online'
-            },
-            security: {
-                twoFAEnabled: securitySettings.two_fa_enabled || false,
-                codeWordEnabled: securitySettings.code_word_enabled || false,
-                securityLevel: securitySettings.security_level || 'low'
-            }
-        });
-
-    } catch (error) {
-        console.error('❌ Ошибка входа:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'Ошибка входа: ' + error.message,
-            code: 'LOGIN_ERROR'
-        });
-    } finally {
-        client.release();
-    }
-};
-
-    // 🔄 Обновление токенов 
+    // 🔄 Обновление токенов (без изменений)
     async refreshToken(req, res) {
         try {
             const { refreshToken } = req.body;
@@ -303,7 +281,7 @@ const verifyCodeAndLogin = async (req, res) => {
         }
     }
 
-    // 📋 Получение активных сессий (ОБНОВЛЕННЫЙ)
+    // 📋 Получение активных сессий
     async getSessions(req, res) {
         try {
             const { userId, deviceId } = req.user;
@@ -327,7 +305,7 @@ const verifyCodeAndLogin = async (req, res) => {
         }
     }
 
-    // 🚪 Завершение конкретной сессии (ОБНОВЛЕННЫЙ)
+    // 🚪 Завершение конкретной сессии
     async endSession(req, res) {
         try {
             const { userId, deviceId } = req.user;
@@ -355,7 +333,7 @@ const verifyCodeAndLogin = async (req, res) => {
         }
     }
 
-    // 🚫 Завершение всех сессий кроме текущей (ОБНОВЛЕННЫЙ)
+    // 🚫 Завершение всех сессий кроме текущей
     async endAllSessions(req, res) {
         try {
             const { userId, deviceId } = req.user;
@@ -378,7 +356,7 @@ const verifyCodeAndLogin = async (req, res) => {
         }
     }
 
-    // 🚪 Выход из текущей сессии (ОБНОВЛЕННЫЙ)
+    // 🚪 Выход из текущей сессии
     async logout(req, res) {
         try {
             const { userId, deviceId, sessionId } = req.user;
@@ -928,4 +906,4 @@ const verifyCodeAndLogin = async (req, res) => {
     }
 }
 
-module.exports = new AuthController();  
+module.exports = new AuthController();
