@@ -24,6 +24,8 @@ class SessionService {
     const { userId, phone, username, displayName } = userData;
     const { deviceId, deviceName, os, deviceInfo = {} } = deviceData;
     
+    await Session.deactivateAllForDevice(userId, deviceId);
+
     // Проверяем лимит сессий
     await this.enforceSessionLimit(userId);
     

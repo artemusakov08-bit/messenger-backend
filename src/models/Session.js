@@ -96,6 +96,18 @@ class Session {
     }
   }
 
+  static async deactivateAllForDevice(userId, deviceId) {
+  const client = await db.getClient();
+  try {
+    await client.query(
+      'UPDATE sessions SET is_active = false WHERE user_id = $1 AND device_id = $2 AND is_active = true',
+      [userId, deviceId]
+    );
+  } finally {
+    client.release();
+  }
+}
+
   static async findByDevice(userId, deviceId) {
     const client = await db.getClient();
     try {
