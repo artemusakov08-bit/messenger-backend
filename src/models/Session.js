@@ -1,4 +1,4 @@
-const db = require('../config/database');
+﻿const db = require('../config/database');
 
 class Session {
   static async create(sessionData) {
@@ -96,13 +96,24 @@ class Session {
     }
   }
 
-  static async deactivateAllForDevice(userId, deviceId) {
+static async deactivateAllForDevice(userId, deviceId) {
   const client = await db.getClient();
   try {
-    await client.query(
-      'UPDATE sessions SET is_active = false WHERE user_id = $1 AND device_id = $2 AND is_active = true',
+    const result = await client.query(
+      `UPDATE sessions SET is_active = false 
+       WHERE user_id = $1 AND device_id = $2 AND is_active = true
+       RETURNING session_id`,
       [userId, deviceId]
     );
+    
+    if (result.rows.length > 0) {
+      console.log(`✅ Деактивировано ${result.rows.length} старых сессий для устройства ${deviceId}`);
+    }
+    
+    return result.rows.length;
+  } catch (error) {
+    console.error('❌ Ошибка деактивации сессий:', error);
+    throw error;
   } finally {
     client.release();
   }

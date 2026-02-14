@@ -21,94 +21,98 @@ class SessionService {
 
   // 🆕 Создать полную сессию с токенами
   async createUserSession(userData, deviceData, ipAddress = null) {
-    const { userId, phone, username, displayName } = userData;
-    const { deviceId, deviceName, os, deviceInfo = {} } = deviceData;
-    
-    await Session.deactivateAllForDevice(userId, deviceId);
-
-    // Проверяем лимит сессий
-    await this.enforceSessionLimit(userId);
-    
-    // Получаем локацию
-    const location = await this.getLocationFromIP(ipAddress);
-    
-    // Генерируем токены
-    const tokens = jwtUtils.generateTokenPair(userId, deviceId, deviceName);
-    
-    // Определяем детали устройства
-    const finalDeviceName = deviceName || this.detectDeviceName(deviceInfo);
-    const finalOs = os || this.detectOS(deviceInfo);
-    
-    // Создаем сессию
-    const session = await Session.create({
-      userId,
-      deviceId,
-      deviceName: finalDeviceName,
+  const { userId, phone, username, displayName } = userData;
+  const { deviceId, deviceName, os, deviceInfo = {} } = deviceData;
+  
+  console.log(`🆕 Создание сессии для пользователя ${userId}, устройства ${deviceId}`);
+  
+  // 🔥 ДЕАКТИВИРУЕМ СТАРУЮ СЕССИЮ ДЛЯ ЭТОГО УСТРОЙСТВА
+  const Session = require('../models/Session');
+  await Session.deactivateAllForDevice(userId, deviceId);
+  
+  // Проверяем лимит сессий
+  await this.enforceSessionLimit(userId);
+  
+  // Получаем локацию
+  const location = await this.getLocationFromIP(ipAddress);
+  
+  // Генерируем токены
+  const tokens = jwtUtils.generateTokenPair(userId, deviceId, deviceName);
+  
+  // Определяем детали устройства
+  const finalDeviceName = deviceName || this.detectDeviceName(deviceInfo);
+  const finalOs = os || this.detectOS(deviceInfo);
+  
+  // Создаем сессию
+  const session = await Session.create({
+    userId,
+    deviceId,
+    deviceName: finalDeviceName,
+    os: finalOs,
+    deviceInfo: {
+      ...deviceInfo,
+      userAgent: deviceInfo.userAgent || 'Unknown',
+      screenResolution: deviceInfo.screenResolution || 'Unknown',
+      language: deviceInfo.language || 'en',
+      timezone: deviceInfo.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      trustedIps: [ipAddress].filter(Boolean),
+      appVersion: deviceInfo.appVersion || '1.0.0',
+      platform: deviceInfo.platform || 'android'
+    },
+    sessionToken: tokens.sessionToken,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    ipAddress,
+    location
+  });
+  
+  // Отправляем уведомление о новом входе на другие устройства
+  this.getSocket().notifyNewLogin(userId, {
+    sessionId: session.session_id,
+    deviceId,
+    deviceName: finalDeviceName,
+    deviceInfo: {
       os: finalOs,
-      deviceInfo: {
-        ...deviceInfo,
-        userAgent: deviceInfo.userAgent || 'Unknown',
-        screenResolution: deviceInfo.screenResolution || 'Unknown',
-        language: deviceInfo.language || 'en',
-        timezone: deviceInfo.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
-        trustedIps: [ipAddress].filter(Boolean),
-        appVersion: deviceInfo.appVersion || '1.0.0',
-        platform: deviceInfo.platform || 'android'
-      },
+      platform: deviceInfo.platform || 'android'
+    },
+    location: {
+      city: location?.city || location?.country || 'Unknown',
+      country: location?.country || 'Unknown',
+      isLocal: location?.isLocal || false
+    },
+    ip: ipAddress ? this.maskIP(ipAddress) : 'Unknown',
+    timestamp: new Date().toISOString()
+  });
+  
+  // Обновляем статус пользователя
+  await this.updateUserStatus(userId, 'online');
+  
+  return {
+    session: {
+      id: session.session_id,
+      deviceId: session.device_id,
+      deviceName: session.device_name,
+      os: session.os,
+      createdAt: session.created_at,
+      location: session.location,
+      ipAddress: session.ip_address ? this.maskIP(session.ip_address) : null
+    },
+    tokens: {
       sessionToken: tokens.sessionToken,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      ipAddress,
-      location
-    });
-    
-    // Отправляем уведомление о новом входе на другие устройства
-    this.getSocket().notifyNewLogin(userId, {
-      sessionId: session.session_id,
-      deviceId,
-      deviceName: finalDeviceName,
-      deviceInfo: {
-        os: finalOs,
-        platform: deviceInfo.platform || 'android'
-      },
-      location: {
-        city: location?.city || location?.country || 'Unknown',
-        country: location?.country || 'Unknown',
-        isLocal: location?.isLocal || false
-      },
-      ip: ipAddress ? this.maskIP(ipAddress) : 'Unknown',
-      timestamp: new Date().toISOString()
-    });
-    
-    // Обновляем статус пользователя
-    await this.updateUserStatus(userId, 'online');
-    
-    return {
-      session: {
-        id: session.session_id,
-        deviceId: session.device_id,
-        deviceName: session.device_name,
-        os: session.os,
-        createdAt: session.created_at,
-        location: session.location,
-        ipAddress: session.ip_address ? this.maskIP(session.ip_address) : null
-      },
-      tokens: {
-        sessionToken: tokens.sessionToken,
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        accessTokenExpiresAt: session.access_token_expires_at,
-        refreshTokenExpiresAt: session.refresh_token_expires_at
-      },
-      user: {
-        id: userId,
-        phone,
-        username,
-        displayName,
-        status: 'online'
-      }
-    };
-  }
+      accessTokenExpiresAt: session.access_token_expires_at,
+      refreshTokenExpiresAt: session.refresh_token_expires_at
+    },
+    user: {
+      id: userId,
+      phone,
+      username,
+      displayName,
+      status: 'online'
+    }
+  };
+}
 
   // 🔄 Обновить токены с валидацией
   async refreshUserTokens(refreshToken, ipAddress = null) {
