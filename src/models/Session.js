@@ -84,8 +84,12 @@ class Session {
       return result.rows.map(session => ({
         ...session,
         isCurrent: currentDeviceId ? session.device_id === currentDeviceId : false,
-        location: session.location ? JSON.parse(session.location) : null,
-        device_info: session.device_info ? JSON.parse(session.device_info) : {}
+        location: session.location && typeof session.location === 'string' 
+            ? JSON.parse(session.location) 
+            : session.location,
+        device_info: session.device_info && typeof session.device_info === 'string' 
+            ? JSON.parse(session.device_info) 
+            : session.device_info
       }));
     } finally {
       client.release();
