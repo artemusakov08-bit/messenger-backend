@@ -80,13 +80,14 @@ class AuthController {
 }
 
     // 🔐 Проверка кода и создание сессии =
-   async verifyCodeAndLogin(req, res) {
+   // 🔐 Проверка кода и создание сессии (ОБНОВЛЕННЫЙ)
+const verifyCodeAndLogin = async (req, res) => {
     const client = await db.getClient();
     try {
         console.log('🔐 === НАЧАЛО ЛОГИНА ===');
         let { phone, code, type = 'sms', deviceId, deviceInfo = {} } = req.body;
         
-        // 🔥 НОРМАЛИЗУЕМ ТЕЛЕФОН - убираем +
+        // НОРМАЛИЗУЕМ ТЕЛЕФОН - убираем +
         const cleanPhone = phone.replace('+', '');
         console.log('📱 Данные:', { 
             originalPhone: phone,
@@ -266,9 +267,9 @@ class AuthController {
     } finally {
         client.release();
     }
-}
+};
 
-    // 🔄 Обновление токенов (ОБНОВЛЕННЫЙ)
+    // 🔄 Обновление токенов 
     async refreshToken(req, res) {
         try {
             const { refreshToken } = req.body;
