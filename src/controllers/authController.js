@@ -19,61 +19,64 @@ console.log('✅ JWT_SECRET загружен');
 class AuthController {
     // 📱 Отправка SMS кода
     async sendVerificationCode(req, res) {
-        try {
-            const { phone, type = 'sms' } = req.body;
-            console.log('📱 Отправка кода для:', phone);
+    try {
+        const { phone, type = 'sms' } = req.body;
+        console.log('📱 Отправка кода для:', phone);
 
-            if (!phone) {
-                return res.status(400).json({ 
-                    success: false,
-                    error: 'Телефон обязателен',
-                    code: 'PHONE_REQUIRED'
-                });
-            }
-
-            const code = Math.floor(100000 + Math.random() * 900000).toString();
-            
-            const client = await db.getClient();
-            try {
-                // Удаляем старые коды
-                await client.query(
-                    'DELETE FROM verification_codes WHERE phone = $1 AND created_at < NOW() - INTERVAL \'1 hour\'',
-                    [phone]
-                );
-
-                const codeId = 'code_' + Date.now();
-                const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-                
-                await client.query(
-                    `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at)
-                     VALUES ($1, $2, $3, $4, $5, NOW())`,
-                    [codeId, phone, code, type, expiresAt]
-                );
-                
-                console.log('✅ Код создан:', { phone, code });
-                
-                // 🔥 ЗДЕСЬ ПОДКЛЮЧАЕМ РЕАЛЬНЫЙ СЕРВИС SMS
-                // await this.sendRealSMS(phone, code);
-                
-                res.json({
-                    success: true,
-                    message: 'Код подтверждения отправлен',
-                    code: code, // Для тестирования
-                    expiresIn: 10
-                });
-            } finally {
-                client.release();
-            }
-
-        } catch (error) {
-            console.error('❌ Ошибка отправки кода:', error);
-            res.status(500).json({ 
+        if (!phone) {
+            return res.status(400).json({ 
                 success: false,
-                error: 'Ошибка отправки кода: ' + error.message,
-                code: 'SEND_CODE_ERROR'
+                error: 'Телефон обязателен',
+                code: 'PHONE_REQUIRED'
             });
         }
+
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        const client = await db.getClient();
+        try {
+            // Удаляем старые коды
+            await client.query(
+                'DELETE FROM verification_codes WHERE phone = $1',
+                [phone]
+            );
+
+            const codeId = 'code_' + Date.now();
+            const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 минут
+            
+            // ✅ СОХРАНЯЕМ КОД В БАЗУ ДАННЫХ
+            await client.query(
+                `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at, is_used)
+                 VALUES ($1, $2, $3, $4, $5, NOW(), false)`,
+                [codeId, phone, code, type, expiresAt]
+            );
+            
+            console.log('✅ Код сохранен в БД:', { phone, code, expiresAt });
+            
+            // Отправка SMS (раскомментируйте, когда будет реальный SMS-шлюз)
+            // await this.sendRealSMS(phone, code);
+            
+            // Для тестирования возвращаем код
+            res.json({
+                success: true,
+                message: 'Код подтверждения отправлен',
+                code: code, // Для тестирования
+                expiresIn: 10
+            });
+            
+        } finally {
+            client.release();
+        }
+
+    } catch (error) {
+        console.error('❌ Ошибка отправки кода:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка отправки кода: ' + error.message,
+            code: 'SEND_CODE_ERROR'
+        });
     }
+}
 
     // 🔐 Проверка кода и создание сессии (ОБНОВЛЕННЫЙ)
     async verifyCodeAndLogin(req, res) {

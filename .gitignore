@@ -54,3 +54,11 @@ build/
 
 # Docker
 .docker/
+
+# Visual Studio
+.vs/
+*.vsidx
+*.user
+*.suo
+*.ntvs*
+*.vsss
