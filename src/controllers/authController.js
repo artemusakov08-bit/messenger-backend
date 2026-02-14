@@ -20,7 +20,7 @@ class AuthController {
     // 📱 Отправка SMS кода
     async sendVerificationCode(req, res) {
     try {
-        const { phone, type = 'sms' } = req.body;
+        let { phone, type = 'sms' } = req.body;
         console.log('📱 Отправка кода для:', phone);
 
         if (!phone) {
@@ -31,6 +31,10 @@ class AuthController {
             });
         }
 
+        // 🔥 НОРМАЛИЗУЕМ НОМЕР — убираем +
+        const cleanPhone = phone.replace('+', '');
+        console.log('📱 Нормализованный номер:', cleanPhone);
+
         const code = Math.floor(100000 + Math.random() * 900000).toString();
         
         const client = await db.getClient();
@@ -38,29 +42,25 @@ class AuthController {
             // Удаляем старые коды
             await client.query(
                 'DELETE FROM verification_codes WHERE phone = $1',
-                [phone]
+                [cleanPhone]  // ← используем cleanPhone
             );
 
             const codeId = 'code_' + Date.now();
-            const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 минут
+            const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
             
-            // ✅ СОХРАНЯЕМ КОД В БАЗУ ДАННЫХ
             await client.query(
                 `INSERT INTO verification_codes (id, phone, code, type, expires_at, created_at, is_used)
                  VALUES ($1, $2, $3, $4, $5, NOW(), false)`,
-                [codeId, phone, code, type, expiresAt]
+                [codeId, cleanPhone, code, type, expiresAt]  // ← cleanPhone
             );
             
-            console.log('✅ Код сохранен в БД:', { phone, code, expiresAt });
-            
-            // Отправка SMS (раскомментируйте, когда будет реальный SMS-шлюз)
-            // await this.sendRealSMS(phone, code);
+            console.log('✅ Код сохранен в БД:', { phone: cleanPhone, code, expiresAt });
             
             // Для тестирования возвращаем код
             res.json({
                 success: true,
                 message: 'Код подтверждения отправлен',
-                code: code, // Для тестирования
+                code: code,
                 expiresIn: 10
             });
             
@@ -76,6 +76,7 @@ class AuthController {
             code: 'SEND_CODE_ERROR'
         });
     }
+}
 }
 
     // 🔐 Проверка кода и создание сессии (ОБНОВЛЕННЫЙ)
