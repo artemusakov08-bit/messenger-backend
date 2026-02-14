@@ -96,6 +96,29 @@ class Session {
     }
   }
 
+static async updateActivity(sessionId, ipAddress = null) {
+  const client = await db.getClient();
+  try {
+    const now = new Date();
+    
+    const result = await client.query(
+      `UPDATE sessions SET 
+         last_active_at = $1,
+         ip_address = COALESCE($2, ip_address)
+       WHERE session_id = $3 AND is_active = true
+       RETURNING *`,
+      [now, ipAddress, sessionId]
+    );
+    
+    return result.rows[0] || null;
+  } catch (error) {
+    console.error('❌ Ошибка обновления активности сессии:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 static async deactivateAllForDevice(userId, deviceId) {
   const client = await db.getClient();
   try {
