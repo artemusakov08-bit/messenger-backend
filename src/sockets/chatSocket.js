@@ -393,6 +393,44 @@ class ChatSocket {
         this.chatSubscriptions.get(chatId).add(userId);
     }
 
+    handleLeaveChat(userId, chatId, ws) {
+    try {
+        console.log(`👋 Пользователь ${userId} покидает чат ${chatId}`);
+
+        // Проверяем, имеет ли пользователь доступ к чату
+        const participants = this.extractParticipantIds(chatId);
+        if (!participants.includes(userId)) {
+            console.log(`⚠️ Пользователь ${userId} пытается покинуть чат, к которому не имеет доступа`);
+            return;
+        }
+
+        // Удаляем чат из подписок пользователя
+        if (this.userChats.has(userId)) {
+            this.userChats.get(userId).delete(chatId);
+        }
+
+        // Удаляем пользователя из подписчиков чата
+        if (this.chatSubscriptions.has(chatId)) {
+            this.chatSubscriptions.get(chatId).delete(userId);
+        }
+
+        // Отправляем подтверждение
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+                type: 'left_chat',
+                chatId: chatId,
+                timestamp: Date.now()
+            }));
+        }
+
+        console.log(`✅ Пользователь ${userId} покинул чат ${chatId}`);
+
+    } catch (error) {
+        console.error(`❌ Ошибка при выходе из чата ${chatId}:`, error);
+        this.sendError(ws, error.message);
+    }
+}
+
     async handleSendMessage(userId, messageData) {
         try {
             const { chatId, text, type = 'text', senderName } = messageData;
