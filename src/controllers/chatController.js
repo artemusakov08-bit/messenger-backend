@@ -181,9 +181,8 @@ async getUserChats(req, res) {
         console.log('👤 User from token:', req.user);
 
         const { userId1, userId2 } = req.body;
-        const currentUserId = req.user?.user_id;
+        const currentUserId = req.user?.userId;
 
-        // 🔥 ПРОВЕРКА: существует ли currentUserId
         if (!currentUserId) {
           console.error('❌ КРИТИЧЕСКАЯ ОШИБКА: currentUserId = undefined!');
           return res.status(500).json({
