@@ -166,7 +166,7 @@ async getUserChats(req, res) {
         
     } catch (error) {
         console.error('❌ Error getting user chats:', error);
-        res.status(500).json({ ф
+        res.status(500).json({ 
             success: false,
             error: 'Ошибка получения чатов: ' + error.message 
         });
