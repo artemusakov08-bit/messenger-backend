@@ -6,6 +6,8 @@ const validationMiddleware = require('../middleware/validationMiddleware');
 
 // Все роуты требуют аутентификации
 router.use(authMiddleware.authenticate);
+
+// 📥 Получение сообщений чата 
 router.get('/chat/:chatId', messageController.getChatMessages);
 
 // 📤 Отправка сообщения
@@ -15,11 +17,6 @@ router.post('/send',
         validationMiddleware.validateDataSize(5)
     ],
     messageController.sendMessage
-);
-
-// 📥 Получение сообщений чата
-router.get('/chat/:chatId',
-    messageController.getChatMessages
 );
 
 // 👁️ Отметка прочтения
