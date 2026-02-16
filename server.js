@@ -291,18 +291,18 @@ async function initializeDatabase() {
         two_fa_enabled BOOLEAN DEFAULT false,
         two_fa_secret TEXT,
         two_fa_setup_at BIGINT,
-        two_fa_attempts INTEGER DEFAULT 0,
-        two_fa_locked_until BIGINT,
         code_word_enabled BOOLEAN DEFAULT false,
         code_word_hash TEXT,
         code_word_hint VARCHAR(100),
         code_word_set_at BIGINT,
-        code_word_attempts INTEGER DEFAULT 0,
-        code_word_locked_until BIGINT,
         additional_passwords JSONB DEFAULT '[]',
+        trusted_devices JSONB DEFAULT '[]',
+        login_history JSONB DEFAULT '[]'::jsonb,
+        failed_attempts INTEGER DEFAULT 0,
+        locked_until TIMESTAMP,
         security_level VARCHAR(20) DEFAULT 'low',
         last_security_update BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000,
-        trusted_devices JSONB DEFAULT '[]'
+        security_score INTEGER DEFAULT 50
       )
     `);
 
@@ -451,6 +451,28 @@ async function initializeDatabase() {
 
     console.log('✅ All database tables created/verified');
     
+    try {
+      console.log('🔄 Проверка наличия колонок в user_security...');
+  
+      const securityColumns = [
+        'login_history JSONB DEFAULT \'[]\'::jsonb',
+        'failed_attempts INTEGER DEFAULT 0',
+        'locked_until TIMESTAMP',
+        'security_score INTEGER DEFAULT 50'
+      ];
+  
+      for (const column of securityColumns) {
+        try {
+          await db.query(`ALTER TABLE user_security ADD COLUMN IF NOT EXISTS ${column}`);
+          console.log(`✅ Добавлена колонка: ${column.split(' ')[0]}`);
+        } catch (error) {
+          console.log(`⚠️ Колонка ${column.split(' ')[0]} уже существует или ошибка: ${error.message}`);
+        }
+      }
+    } catch (error) {
+      console.log('⚠️ Ошибка при добавлении колонок в user_security:', error.message);
+    }
+
   } catch (error) {
     console.error('❌ Database initialization error:', error);
     console.log('⚠️  Application will continue with limited functionality');

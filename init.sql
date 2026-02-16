@@ -40,27 +40,6 @@ CREATE TABLE IF NOT EXISTS chats (
     created_by VARCHAR(50)
 );
 
--- Таблица безопасности пользователей
-CREATE TABLE IF NOT EXISTS user_security (
-    id VARCHAR(50) PRIMARY KEY,
-    user_id VARCHAR(50) REFERENCES users(user_id) ON DELETE CASCADE UNIQUE,
-    two_fa_enabled BOOLEAN DEFAULT false,
-    two_fa_secret TEXT,
-    two_fa_setup_at BIGINT,
-    code_word_enabled BOOLEAN DEFAULT false,
-    code_word_hash TEXT,
-    code_word_hint TEXT,
-    code_word_set_at BIGINT,
-    security_level VARCHAR(20) DEFAULT 'low',
-    additional_passwords JSONB DEFAULT '[]'::jsonb,
-    trusted_devices JSONB DEFAULT '[]'::jsonb,
-    login_history JSONB DEFAULT '[]'::jsonb,
-    failed_attempts INTEGER DEFAULT 0,
-    locked_until TIMESTAMP,
-    last_security_update BIGINT,
-    security_score INTEGER DEFAULT 50
-);
-
 -- Создание таблицы сообщений
 CREATE TABLE IF NOT EXISTS messages (
     id VARCHAR(50) PRIMARY KEY,
