@@ -163,25 +163,22 @@ class ChatSocket {
     async handleAuthentication(ws, token) {
         try {
             console.log('🔐 Проверка токена...');
-            
+        
             let decoded;
             let isExpired = false;
-            
+        
             try {
-                // Пробуем проверить токен
                 decoded = jwt.verify(token, process.env.JWT_SECRET);
             } catch (error) {
                 if (error.name === 'TokenExpiredError') {
                     console.log('⚠️ Токен истек, но декодируем для получения userId');
                     isExpired = true;
-                    // Декодируем без проверки, чтобы получить userId
                     decoded = jwt.decode(token);
-                    
+                
                     if (!decoded || !decoded.userId) {
                         throw new Error('Не удалось декодировать истекший токен');
                     }
-                    
-                    // Отправляем клиенту уведомление об истечении токена
+                
                     ws.send(JSON.stringify({
                         type: 'token_expired',
                         message: 'Access token expired',
@@ -191,71 +188,69 @@ class ChatSocket {
                         timestamp: Date.now()
                     }));
                 } else {
-                    // Другие ошибки (неверный токен и т.д.)
                     throw error;
                 }
             }
-            
+        
             const userId = decoded.userId;
-            
+        
             if (!userId) {
                 throw new Error('User ID not found in token');
             }
-            
-            // Убедимся, что userId - число (преобразуем если строка)
+        
             const numericUserId = String(userId).replace(/\D/g, '');
-            
+        
             if (!numericUserId) {
                 throw new Error('Invalid user ID format');
             }
-            
+        
             if (isExpired) {
-                // Если токен истек, сохраняем соединение, но отмечаем как неаутентифицированное
                 console.log(`⚠️ Пользователь ${numericUserId} с истекшим токеном`);
-                
-                // Добавляем соединение, но не аутентифицируем
+            
                 if (!this.userConnections.has(numericUserId)) {
                     this.userConnections.set(numericUserId, new Set());
                 }
                 this.userConnections.get(numericUserId).add(ws);
-                
+            
                 ws.userId = numericUserId;
                 ws.isAuthenticated = false;
-                
+            
                 return {
                     userId: numericUserId,
                     authenticated: false,
                     expired: true
                 };
             }
-            
-            // Токен валидный - полная аутентификация
+        
             if (!this.userConnections.has(numericUserId)) {
                 this.userConnections.set(numericUserId, new Set());
             }
             this.userConnections.get(numericUserId).add(ws);
-            
+        
             ws.userId = numericUserId;
             ws.isAuthenticated = true;
-            
+        
             console.log(`✅ Аутентифицирован пользователь: ${numericUserId}`);
-            
+        
             ws.send(JSON.stringify({
                 type: 'authenticated',
                 userId: numericUserId,
                 timestamp: Date.now(),
                 message: 'Аутентификация успешна'
             }));
-            
+        
+            // 🔥 ОТПРАВЛЯЕМ ВСЕМ, ЧТО ПОЛЬЗОВАТЕЛЬ ОНЛАЙН
+            this.broadcastUserStatus(numericUserId, 'online');
+        
             return {
                 userId: numericUserId,
                 authenticated: true,
                 expired: false
             };
-            
+        
         } catch (error) {
             console.error('❌ Ошибка аутентификации:', error.message);
-            
+        
             if (error.name === 'TokenExpiredError') {
                 ws.send(JSON.stringify({
                     type: 'auth_error',
@@ -271,7 +266,7 @@ class ChatSocket {
                 }));
                 ws.close(1008, 'Authentication failed');
             }
-            
+        
             return {
                 userId: null,
                 authenticated: false,
@@ -722,12 +717,15 @@ class ChatSocket {
 
     handleTyping(userId, chatId, isTyping) {
         const typingMessage = {
-            type: isTyping ? 'user_typing' : 'user_stopped_typing',
-            chatId,
-            userId,
+            type: 'user_typing',           
+            chatId: chatId,
+            userId: userId,
+            isTyping: isTyping,            
             timestamp: Date.now()
         };
-        
+    
+        console.log(`✏️ ${userId} ${isTyping ? 'печатает' : 'перестал печатать'} в ${chatId}`);
+    
         this.broadcastToChat(chatId, typingMessage, userId);
     }
 
@@ -765,13 +763,15 @@ class ChatSocket {
     handleDisconnect(userId, ws) {
         if (this.userConnections.has(userId)) {
             this.userConnections.get(userId).delete(ws);
-            
+        
             if (this.userConnections.get(userId).size === 0) {
                 this.userConnections.delete(userId);
                 this.userChats.delete(userId);
+            
+                this.broadcastUserStatus(userId, 'offline', Date.now());
             }
         }
-        
+    
         console.log(`👋 Пользователь ${userId} отключился`);
     }
 
@@ -837,6 +837,25 @@ class ChatSocket {
         
         ws.send(JSON.stringify(info));
     }
+
+    broadcastUserStatus(userId, status, lastSeen = null) {
+    const statusMessage = {
+        type: 'user_status',
+        userId: userId,
+        status: status,
+        lastSeen: lastSeen || Date.now(),
+        timestamp: Date.now()
+    };
+    
+    console.log(`📢 Рассылка статуса ${status} для пользователя ${userId}`);
+    
+    // Отправляем всем пользователям, у которых есть чаты с этим userId
+    this.userConnections.forEach((connections, uid) => {
+        if (uid !== userId) {
+            this.sendToUser(uid, statusMessage);
+        }
+    });
+  
 
     logMessageStats(chatId, senderId) {
         const participants = this.extractParticipantIds(chatId);
