@@ -834,32 +834,32 @@ class ChatSocket {
                 }))
             }
         };
-        
+    
         ws.send(JSON.stringify(info));
     }
 
-broadcastUserStatus(userId, status, lastSeen = null) {
-    const statusMessage = {
-        type: 'user_status',
-        userId: userId,
-        status: status,
-        lastSeen: lastSeen || Date.now(),
-        timestamp: Date.now()
-    };
+    broadcastUserStatus(userId, status, lastSeen = null) {
+        const statusMessage = {
+            type: 'user_status',
+            userId: userId,
+            status: status,
+            lastSeen: lastSeen || Date.now(),
+            timestamp: Date.now()
+        };
 
-    console.log(`📢 Рассылка статуса ${status} для пользователя ${userId}`);
+        console.log(`📢 Рассылка статуса ${status} для пользователя ${userId}`);
 
-    // Отправляем всем пользователям, у которых есть чаты с этим userId
-    this.userConnections.forEach((connections, uid) => {
-        if (uid !== userId) {
-            this.sendToUser(uid, statusMessage);
-        }
-    });
-},
-  
+        // Отправляем всем пользователям, у которых есть чаты с этим userId
+        this.userConnections.forEach((connections, uid) => {
+            if (uid !== userId) {
+                this.sendToUser(uid, statusMessage);
+            }
+        });
+    } =
+
     logMessageStats(chatId, senderId) {
         const participants = this.extractParticipantIds(chatId);
-        
+    
         console.log(`📊 Статистика отправки сообщения:`, {
             chatId,
             senderId,
@@ -873,8 +873,7 @@ broadcastUserStatus(userId, status, lastSeen = null) {
                     connected: this.userConnections.has(id) && this.userConnections.get(id).size > 0
                 }))
         });
-    }
-}
+    }  
 
     getStats() {
         return {
@@ -890,7 +889,6 @@ broadcastUserStatus(userId, status, lastSeen = null) {
                 subscribers: Array.from(subscribers)
             }))
         };
-    }
-}
+    } 
 
 module.exports = ChatSocket;
