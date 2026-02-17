@@ -890,5 +890,6 @@ class ChatSocket {
             }))
         };
     } 
+}
 
 module.exports = ChatSocket;
