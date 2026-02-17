@@ -838,7 +838,7 @@ class ChatSocket {
         ws.send(JSON.stringify(info));
     }
 
-    broadcastUserStatus(userId, status, lastSeen = null) {
+broadcastUserStatus(userId, status, lastSeen = null) {
     const statusMessage = {
         type: 'user_status',
         userId: userId,
@@ -846,17 +846,17 @@ class ChatSocket {
         lastSeen: lastSeen || Date.now(),
         timestamp: Date.now()
     };
-    
+
     console.log(`📢 Рассылка статуса ${status} для пользователя ${userId}`);
-    
+
     // Отправляем всем пользователям, у которых есть чаты с этим userId
     this.userConnections.forEach((connections, uid) => {
         if (uid !== userId) {
             this.sendToUser(uid, statusMessage);
         }
     });
+},
   
-
     logMessageStats(chatId, senderId) {
         const participants = this.extractParticipantIds(chatId);
         
@@ -874,6 +874,7 @@ class ChatSocket {
                 }))
         });
     }
+}
 
     getStats() {
         return {
