@@ -855,7 +855,7 @@ class ChatSocket {
                 this.sendToUser(uid, statusMessage);
             }
         });
-    } =
+    } 
 
     logMessageStats(chatId, senderId) {
         const participants = this.extractParticipantIds(chatId);
