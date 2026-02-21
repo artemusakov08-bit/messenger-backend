@@ -575,27 +575,64 @@ class SessionService {
   }
 
   // 👤 Обновление статуса пользователя
-async updateUserStatus(userId, status) {
-    const db = require('../config/database');
-    const client = await db.getClient();
-    try {
-      await client.query(
-        'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
-        [status, Date.now(), userId]  
-      );
-      
-      // Уведомляем все устройства об изменении статуса
-      this.getSocket().notifyAllDevices(userId, {
-        type: 'USER_STATUS_CHANGE',
-        userId,
-        status,
-        timestamp: new Date().toISOString() 
-      });
-      
-    } finally {
-      client.release();
-    }
-}
+  async updateUserStatus(userId, status) {
+      const db = require('../config/database');
+      const client = await db.getClient();
+      try {
+          await client.query(
+              'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
+              [status, Date.now(), userId]
+          );
+          
+          // Получаем всех пользователей, у которых есть чаты с этим userId
+          const chatsResult = await client.query(
+              `SELECT DISTINCT user_id FROM (
+                  SELECT 
+                      CASE 
+                          WHEN split_part(chat_id, '_', 2) = $1 THEN split_part(chat_id, '_', 4)
+                          ELSE split_part(chat_id, '_', 2)
+                      END as user_id
+                  FROM messages 
+                  WHERE chat_id LIKE $2 OR chat_id LIKE $3 OR chat_id LIKE $4
+                  UNION
+                  SELECT 
+                      CASE 
+                          WHEN position($5 in chat_id) = 1 THEN split_part(chat_id, '_', 4)
+                          ELSE split_part(chat_id, '_', 2)
+                      END
+                  FROM chats 
+                  WHERE id LIKE $2 OR id LIKE $3 OR id LIKE $4
+              ) AS participants WHERE user_id IS NOT NULL AND user_id != $1`,
+              [userId, `%${userId}%`, `${userId}_%`, `%_${userId}`, `user_${userId}_`]
+          );
+          
+          // Отправляем статус всем участникам чатов
+          const notificationSocket = require('../sockets/notificationSocket').getNotificationSocket();
+          
+          chatsResult.rows.forEach(row => {
+              notificationSocket.sendToUser(row.user_id, {
+                  type: 'user_status',
+                  userId: userId,
+                  status: status,
+                  lastSeen: Date.now(),
+                  timestamp: new Date().toISOString()
+              });
+          });
+          
+          // Также уведомляем все устройства самого пользователя
+          notificationSocket.notifyAllDevices(userId, {
+              type: 'USER_STATUS_CHANGE',
+              userId,
+              status,
+              timestamp: new Date().toISOString()
+          });
+          
+          console.log(`📢 Статус пользователя ${userId} изменен на ${status}, уведомлено ${chatsResult.rows.length} пользователей`);
+          
+      } finally {
+          client.release();
+      }
+  }
 
   // 🚫 Пометить сессию неактивной если устройство долго оффлайн
   async markInactiveIfOfflineTooLong(session) {

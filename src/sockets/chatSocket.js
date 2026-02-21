@@ -159,14 +159,13 @@ class ChatSocket {
         });
     }
 
-    // ОБНОВЛЕННЫЙ МЕТОД АУТЕНТИФИКАЦИИ
     async handleAuthentication(ws, token) {
         try {
             console.log('🔐 Проверка токена...');
-        
+            
             let decoded;
             let isExpired = false;
-        
+            
             try {
                 decoded = jwt.verify(token, process.env.JWT_SECRET);
             } catch (error) {
@@ -174,11 +173,11 @@ class ChatSocket {
                     console.log('⚠️ Токен истек, но декодируем для получения userId');
                     isExpired = true;
                     decoded = jwt.decode(token);
-                
+                    
                     if (!decoded || !decoded.userId) {
                         throw new Error('Не удалось декодировать истекший токен');
                     }
-                
+                    
                     ws.send(JSON.stringify({
                         type: 'token_expired',
                         message: 'Access token expired',
@@ -191,66 +190,66 @@ class ChatSocket {
                     throw error;
                 }
             }
-        
+            
             const userId = decoded.userId;
-        
+            
             if (!userId) {
                 throw new Error('User ID not found in token');
             }
-        
+            
             const numericUserId = String(userId).replace(/\D/g, '');
-        
+            
             if (!numericUserId) {
                 throw new Error('Invalid user ID format');
             }
-        
+            
             if (isExpired) {
                 console.log(`⚠️ Пользователь ${numericUserId} с истекшим токеном`);
-            
+                
                 if (!this.userConnections.has(numericUserId)) {
                     this.userConnections.set(numericUserId, new Set());
                 }
                 this.userConnections.get(numericUserId).add(ws);
-            
+                
                 ws.userId = numericUserId;
                 ws.isAuthenticated = false;
-            
+                
                 return {
                     userId: numericUserId,
                     authenticated: false,
                     expired: true
                 };
             }
-        
+            
             if (!this.userConnections.has(numericUserId)) {
                 this.userConnections.set(numericUserId, new Set());
             }
             this.userConnections.get(numericUserId).add(ws);
-        
+            
             ws.userId = numericUserId;
             ws.isAuthenticated = true;
-        
+            
             console.log(`✅ Аутентифицирован пользователь: ${numericUserId}`);
-        
+            
             ws.send(JSON.stringify({
                 type: 'authenticated',
                 userId: numericUserId,
                 timestamp: Date.now(),
                 message: 'Аутентификация успешна'
             }));
-        
+            
             // 🔥 ОТПРАВЛЯЕМ ВСЕМ, ЧТО ПОЛЬЗОВАТЕЛЬ ОНЛАЙН
             this.broadcastUserStatus(numericUserId, 'online');
-        
+            
             return {
                 userId: numericUserId,
                 authenticated: true,
                 expired: false
             };
-        
+            
         } catch (error) {
             console.error('❌ Ошибка аутентификации:', error.message);
-        
+            
             if (error.name === 'TokenExpiredError') {
                 ws.send(JSON.stringify({
                     type: 'auth_error',
@@ -266,7 +265,7 @@ class ChatSocket {
                 }));
                 ws.close(1008, 'Authentication failed');
             }
-        
+            
             return {
                 userId: null,
                 authenticated: false,
@@ -763,16 +762,16 @@ class ChatSocket {
     handleDisconnect(userId, ws) {
         if (this.userConnections.has(userId)) {
             this.userConnections.get(userId).delete(ws);
-        
+            
             if (this.userConnections.get(userId).size === 0) {
                 this.userConnections.delete(userId);
                 this.userChats.delete(userId);
-            
+                
                 this.broadcastUserStatus(userId, 'offline', Date.now());
             }
         }
-    
-        console.log(`👋 Пользователь ${userId} отключился`);
+        
+        console.log(`Пользователь ${userId} отключился`);
     }
 
     cleanupDeadConnections() {
@@ -847,15 +846,14 @@ class ChatSocket {
             timestamp: Date.now()
         };
 
-        console.log(`📢 Рассылка статуса ${status} для пользователя ${userId}`);
+        console.log(`Рассылка статуса ${status} для пользователя ${userId}`);
 
-        // Отправляем всем пользователям, у которых есть чаты с этим userId
         this.userConnections.forEach((connections, uid) => {
             if (uid !== userId) {
                 this.sendToUser(uid, statusMessage);
             }
         });
-    } 
+    }
 
     logMessageStats(chatId, senderId) {
         const participants = this.extractParticipantIds(chatId);

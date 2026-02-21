@@ -86,6 +86,15 @@ class NotificationSocket {
     this.io.to(room).emit('user:notification', notification);
   }
 
+  sendToUser(userId, notification) {
+      const room = `user:${userId}:sessions`;
+      this.io.to(room).emit('user:notification', notification);
+      
+      if (notification.deviceId) {
+          this.notifyDevice(userId, notification.deviceId, notification);
+      }
+  }
+
   // Проверка онлайн статуса устройства
   isDeviceOnline(userId, deviceId) {
     const room = `user:${userId}:device:${deviceId}`;
