@@ -39,7 +39,7 @@ const sendMessage = async (req, res) => {
     try {
         await connection.query('BEGIN');
         
-        const { chatId, text, senderId, senderName, type = 'text' } = req.body;
+        const { chat_id: chatId, text, sender_id: senderId, sender_name: senderName, type = 'text' } = req.body;
         const { deviceId } = req.user;
         
         console.log(`📤 Отправка сообщения от ${senderId} (устройство ${deviceId}) в ${chatId}`);
