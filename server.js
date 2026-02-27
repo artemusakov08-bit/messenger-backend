@@ -168,21 +168,14 @@ app.use('/api/call', authMiddleware.authenticate, callRoutes);
 app.use('/api/message', authMiddleware.authenticate, messageRoutes);
 app.use('/api/username', authMiddleware.authenticate, usernameRoutes);
 
-// Подключение к PostgreSQL
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+pool.on('connect', () => {
+  console.log('✅ Connected to the database successfully');
 });
 
 pool.on('error', (err) => {
-  console.error('❌ Database connection error:', err);
+  console.error('❌ Database error:', err);
 });
-
-pool.on('connect', () => {
-  console.log('✅ Database connected successfully');
-});
+// ==========================================================
 
 // Функция инициализации базы
 async function initializeDatabase() {
@@ -500,7 +493,7 @@ io.on('connection', (socket) => {
           });
           
           // Отправляем текущую статистику
-          pool.query(`
+          db.query(`
               SELECT COUNT(*) as pending_count 
               FROM reports 
               WHERE status = 'pending'
@@ -538,12 +531,12 @@ io.on('connection', (socket) => {
       console.log('📞 Starting call via WebSocket:', { fromUserId, toUserId, callType });
 
       // Проверяем существование пользователей
-      const fromUser = await pool.query(
+      const fromUser = await db.query(
         'SELECT * FROM users WHERE user_id = $1',
         [fromUserId]
       );
       
-      const toUser = await pool.query(
+      const toUser = await db.query(
         'SELECT * FROM users WHERE user_id = $1',
         [toUserId]
       );
@@ -556,7 +549,7 @@ io.on('connection', (socket) => {
       const callId = 'call_' + Date.now();
       
       // Сохраняем звонок в базу
-      const result = await pool.query(
+      const result = await db.query(
         `INSERT INTO calls (id, from_user_id, to_user_id, call_type, status, created_at) 
         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
         [callId, fromUserId, toUserId, callType, 'ringing', new Date()]
@@ -597,7 +590,7 @@ io.on('connection', (socket) => {
       console.log('✅ Accepting call:', callId);
 
       // Обновляем статус звонка
-      const result = await pool.query(
+      const result = await db.query(
         `UPDATE calls SET status = 'active' WHERE id = $1 RETURNING *`,
         [callId]
       );
@@ -636,7 +629,7 @@ io.on('connection', (socket) => {
       console.log('❌ Rejecting call:', callId);
 
       // Обновляем статус звонка
-      const result = await pool.query(
+      const result = await db.query(
         `UPDATE calls SET status = 'rejected' WHERE id = $1 RETURNING *`,
         [callId]
       );
@@ -669,7 +662,7 @@ io.on('connection', (socket) => {
       
       console.log('📞 Ending call:', { callId, duration });
 
-      const result = await pool.query(
+      const result = await db.query(
         `UPDATE calls 
         SET status = 'ended', duration = $1, ended_at = $2 
         WHERE id = $3 RETURNING *`,
@@ -735,7 +728,7 @@ io.on('connection', (socket) => {
       
       console.log(`👤 Пользователь ${fullUserId} подключен`);
       
-      pool.query(
+      db.query(
           'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
           ['online', Date.now(), userId]
       );
@@ -778,7 +771,7 @@ io.on('connection', (socket) => {
       const timestamp = Date.now();
       
       // 🔥 СОХРАНЯЕМ В БД
-      await pool.query(
+      await db.query(
         `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, type, timestamp) 
         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [messageId, chatId, text, senderId, senderName, type, timestamp]
@@ -786,7 +779,7 @@ io.on('connection', (socket) => {
       console.log('✅ Сообщение сохранено:', messageId);
 
       // 🔥 СОЗДАЕМ/ОБНОВЛЯЕМ ЧАТ
-      const chatCheck = await pool.query(
+      const chatCheck = await db.query(
         'SELECT id FROM chats WHERE id = $1',
         [chatId]
       );
@@ -795,7 +788,7 @@ io.on('connection', (socket) => {
         const otherUserId = senderId === user1 ? user2 : user1;
         let chatName = 'Приватный чат';
         
-        const userResult = await pool.query(
+        const userResult = await db.query(
           'SELECT display_name FROM users WHERE user_id = $1',
           [otherUserId]
         );
@@ -804,14 +797,14 @@ io.on('connection', (socket) => {
           chatName = userResult.rows[0].display_name || `User ${otherUserId.slice(-4)}`;
         }
         
-        await pool.query(
+        await db.query(
           `INSERT INTO chats (id, name, type, timestamp, last_message) 
           VALUES ($1, $2, $3, $4, $5)`,
           [chatId, chatName, 'private', timestamp, text]
         );
         console.log('✅ Чат создан:', chatId);
       } else {
-        await pool.query(
+        await db.query(
           'UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3',
           [timestamp, text, chatId]
         );
@@ -844,7 +837,7 @@ io.on('connection', (socket) => {
           
           // Для уведомления используем чистый ID (без user_)
           const receiverCleanId = receiverId.replace('user_', '');
-          await pool.query(
+          await db.query(
               `INSERT INTO notifications (id, user_id, type, title, body, data, created_at)
               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
               ['notif_' + Date.now(), receiverCleanId, 'new_message',
@@ -884,7 +877,7 @@ io.on('connection', (socket) => {
         console.log(`👤 Пользователь ${userId} отключился`);
         
         // Обновляем статус в базе
-        pool.query(
+        db.query(
           'UPDATE users SET status = $1, last_seen = $2 WHERE user_id = $3',
           ['offline', Date.now(), userId]
         ).catch(err => console.error('❌ Error updating user status:', err));
@@ -902,7 +895,7 @@ app.get('/api/users/phone/:phone', async (req, res) => {
         const { phone } = req.params;
         console.log('🔍 Searching user by phone:', phone);
 
-        const result = await pool.query(
+        const result = await db.query(
             'SELECT * FROM users WHERE phone = $1',
             [phone]
         );
@@ -947,7 +940,7 @@ app.get('/api/users', async (req, res) => {
   
   try {
     console.log('🔍 Querying database...');
-    const result = await pool.query('SELECT * FROM users');
+    const result = await db.query('SELECT * FROM users');
     console.log(`✅ Found ${result.rows.length} users`);
     
     res.json({
@@ -974,7 +967,7 @@ app.get('/api/users/:userId/status', async (req, res) => {
         const isOnline = connectedUsers.has(`user_${userId}`);
         
         // Получаем из базы
-        const result = await pool.query(
+        const result = await db.query(
             'SELECT last_seen FROM users WHERE user_id = $1',
             [userId]
         );
@@ -1016,7 +1009,7 @@ app.get('/api/moderation/user/:phone', async (req, res) => {
 
     console.log('📞 Formatted phone:', formattedPhone);
 
-    const result = await pool.query(
+    const result = await db.query(
       'SELECT user_id, username, display_name, phone, role, status, is_premium, auth_level FROM users WHERE phone = $1',
       [formattedPhone]
     );
@@ -1144,7 +1137,7 @@ app.get('/api/moderation/templates', async (req, res) => {
         
         query += ' ORDER BY created_at DESC';
         
-        const result = await pool.query(query, params);
+        const result = await db.query(query, params);
         
         res.json({
             success: true,
@@ -1164,7 +1157,7 @@ app.get('/api/chat/my-chats', authMiddleware.authenticate, async (req, res) => {
     try {
         const userId = req.user.userId;
         
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT c.*, 
                     (SELECT text FROM messages 
                      WHERE chat_id = c.id 
@@ -1285,7 +1278,7 @@ app.get('/api/users/search', async (req, res) => {
         
         const cleanQuery = query.replace('@', '').trim();
         
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT user_id, username, display_name, profile_image, status, bio, phone
              FROM users 
              WHERE username ILIKE $1 OR display_name ILIKE $1
@@ -1334,7 +1327,7 @@ app.get('/api/users/search/username/:username', async (req, res) => {
         const { username } = req.params;
         console.log('🔍 Searching user by username:', username);
         
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT user_id, username, display_name, profile_image, status, bio
              FROM users 
              WHERE username ILIKE $1 
@@ -1374,7 +1367,7 @@ app.get('/api/users/:userId', async (req, res) => {
             });
         }
         
-        const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+        const result = await db.query('SELECT * FROM users WHERE user_id = $1', [userId]);
         
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'User not found' });
@@ -1397,7 +1390,7 @@ app.put('/api/users/:userId', async (req, res) => {
 
         console.log('✏️ Updating profile:', { userId, username, birthday });
 
-        const currentUser = await pool.query(
+        const currentUser = await db.query(
             'SELECT username FROM users WHERE user_id = $1',
             [userId]
         );
@@ -1406,7 +1399,7 @@ app.put('/api/users/:userId', async (req, res) => {
             const currentUsername = currentUser.rows[0].username;
             
             if (currentUsername !== username) {
-                const checkResult = await pool.query(
+                const checkResult = await db.query(
                     'SELECT user_id FROM users WHERE username = $1',
                     [username]
                 );
@@ -1420,7 +1413,7 @@ app.put('/api/users/:userId', async (req, res) => {
             }
         }
 
-        const result = await pool.query(
+        const result = await db.query(
             'UPDATE users SET display_name = $1, username = $2, bio = $3, phone_number = $4, birthday = $5 WHERE user_id = $6 RETURNING *',
             [display_name, username, bio, phone, birthday, userId] 
         );
@@ -1454,7 +1447,7 @@ app.get('/api/calls/history/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT * FROM calls 
              WHERE from_user_id = $1 OR to_user_id = $1 
              ORDER BY created_at DESC 
@@ -1494,7 +1487,7 @@ app.put('/api/users/:userId/settings', async (req, res) => {
         });
 
         // Проверяем существование пользователя
-        const userCheck = await pool.query(
+        const userCheck = await db.query(
             'SELECT * FROM users WHERE user_id = $1',
             [userId]
         );
@@ -1507,7 +1500,7 @@ app.put('/api/users/:userId/settings', async (req, res) => {
         }
 
         // Обновляем настройки в базе
-        const result = await pool.query(
+        const result = await db.query(
             `UPDATE users SET 
                 message_notifications = $1,
                 call_notifications = $2, 
@@ -1550,7 +1543,7 @@ app.get('/api/users/:userId/settings', async (req, res) => {
 
         console.log('⚙️ Getting settings for user:', userId);
 
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT 
                 message_notifications,
                 call_notifications,
@@ -1592,7 +1585,7 @@ app.post('/api/moderation/templates', async (req, res) => {
         
         const templateId = 'template_' + Date.now();
         
-        const result = await pool.query(
+        const result = await db.query(
             `INSERT INTO template_responses (id, title, content, category, created_by)
              VALUES ($1, $2, $3, $4, $5) RETURNING *`,
             [templateId, title, content, category, createdBy]
@@ -1622,7 +1615,7 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
     const { templateId, moderatorId, additionalNotes } = req.body;
         
         // Получаем шаблон
-        const templateResult = await pool.query(
+        const templateResult = await db.query(
             'SELECT * FROM template_responses WHERE id = $1',
             [templateId]
         );
@@ -1641,7 +1634,7 @@ app.post('/api/moderation/reports/:reportId/respond', async (req, res) => {
             ? `${template.content}\n\nДополнительно: ${additionalNotes}`
             : template.content;
             
-        const result = await pool.query(
+        const result = await db.query(
             `UPDATE reports 
              SET status = 'resolved', resolution = $1, resolved_at = $2, assigned_moderator_id = $3
              WHERE id = $4 RETURNING *`,
@@ -1682,7 +1675,7 @@ app.get('/api/username/check/:username', async (req, res) => {
         console.log('🔍 Checking username:', username);
         
         // Проверяем, занят ли username
-        const result = await pool.query(
+        const result = await db.query(
             'SELECT user_id FROM users WHERE username ILIKE $1',
             [username]
         );
@@ -1715,7 +1708,7 @@ app.put('/api/users/:userId/username', async (req, res) => {
         console.log('✏️ Updating username:', { userId, username });
         
         // Проверяем, не занят ли новый username другим пользователем
-        const checkResult = await pool.query(
+        const checkResult = await db.query(
             'SELECT user_id FROM users WHERE username ILIKE $1 AND user_id != $2',
             [username, userId]
         );
@@ -1728,7 +1721,7 @@ app.put('/api/users/:userId/username', async (req, res) => {
         }
         
         // Обновляем username
-        const updateResult = await pool.query(
+        const updateResult = await db.query(
             'UPDATE users SET username = $1 WHERE user_id = $2 RETURNING *',
             [username, userId]
         );
@@ -1762,7 +1755,7 @@ app.get('/api/moderation/reports', async (req, res) => {
   try {
     const { status = 'pending', limit = 50 } = req.query;
     
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT r.*, 
               reporter.username as reporter_username,
               reported.username as reported_username,
@@ -1806,7 +1799,7 @@ app.post('/api/moderation/reports', async (req, res) => {
     const reportId = 'report_' + Date.now();
     
     // Проверяем премиум статус
-    const reporterResult = await pool.query(
+    const reporterResult = await db.query(
       'SELECT is_premium FROM users WHERE user_id = $1',
       [reporterId]
     );
@@ -1823,7 +1816,7 @@ app.post('/api/moderation/reports', async (req, res) => {
       priority = 'critical';
     }
     
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO reports (id, reporter_id, reported_user_id, reported_message_id, reason, priority, is_premium)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [reportId, reporterId, reportedUserId, messageId, reason, priority, isPremium]
@@ -1856,7 +1849,7 @@ app.patch('/api/moderation/reports/:reportId/assign', async (req, res) => {
     const { reportId } = req.params;
     const { moderatorId } = req.body;
     
-    const result = await pool.query(
+    const result = await db.query(
       `UPDATE reports 
        SET status = 'in_progress', assigned_moderator_id = $1
        WHERE id = $2 RETURNING *`,
@@ -1902,13 +1895,13 @@ app.get('/api/moderation/dashboard', async (req, res) => {
       avgResolutionTime
     ] = await Promise.all([
       // Всего жалоб
-      pool.query('SELECT COUNT(*) FROM reports WHERE created_at > $1', [startTime]),
+      db.query('SELECT COUNT(*) FROM reports WHERE created_at > $1', [startTime]),
       // Решенные жалобы
-      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1 AND created_at > $1', ['resolved', startTime]),
+      db.query('SELECT COUNT(*) FROM reports WHERE status = $1 AND created_at > $1', ['resolved', startTime]),
       // Ожидающие жалобы
-      pool.query('SELECT COUNT(*) FROM reports WHERE status = $1', ['pending']),
+      db.query('SELECT COUNT(*) FROM reports WHERE status = $1', ['pending']),
       // Среднее время решения
-      pool.query(`
+      db.query(`
         SELECT AVG(resolved_at - created_at) as avg_time 
         FROM reports 
         WHERE status = 'resolved' AND resolved_at IS NOT NULL
@@ -1945,7 +1938,7 @@ app.get('/api/moderation/dashboard', async (req, res) => {
 // ==================== 📋 ПОЛУЧИТЬ ВСЕ ГРУППЫ ====================
 app.get('/api/groups', async (req, res) => {
     try {
-        const result = await pool.query(`
+        const result = await db.query(`
             SELECT g.*, COUNT(gm.user_id) as member_count
             FROM groups g
             LEFT JOIN group_members gm ON g.id = gm.group_id
@@ -1969,7 +1962,7 @@ app.get('/api/groups/search', async (req, res) => {
             return res.json([]);
         }
         
-        const result = await pool.query(`
+        const result = await db.query(`
             SELECT g.*, COUNT(gm.user_id) as member_count
             FROM groups g
             LEFT JOIN group_members gm ON g.id = gm.group_id
@@ -1993,14 +1986,14 @@ app.post('/api/groups', async (req, res) => {
     
     console.log('👥 Создание группы:', { name, createdBy });
     
-    const result = await pool.query(
+    const result = await db.query(
       `INSERT INTO groups (id, name, description, created_by, created_at) 
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [groupId, name, description, createdBy, Date.now()]
     );
 
     // Добавляем создателя как администратора
-    await pool.query(
+    await db.query(
       'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3)',
       [groupId, createdBy, 'admin']
     );
@@ -2026,7 +2019,7 @@ app.post('/api/groups/:groupId/members', async (req, res) => {
 
     console.log('👥 Добавление пользователя в группу:', { groupId, userId, role });
 
-    const result = await pool.query(
+    const result = await db.query(
       'INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, $3) RETURNING *',
       [groupId, userId, role]
     );
@@ -2044,7 +2037,7 @@ app.get('/api/users/:userId/groups', async (req, res) => {
   try {
     const { userId } = req.params;
 
-    const result = await pool.query(
+    const result = await db.query(
       `SELECT g.*, gm.role 
        FROM groups g
        JOIN group_members gm ON g.id = gm.group_id
@@ -2079,7 +2072,7 @@ app.get('/api/username/search', async (req, res) => {
         
         console.log('🔍 Searching by username for mentions:', query);
         
-        const result = await pool.query(
+        const result = await db.query(
             `SELECT user_id, username, display_name, profile_image
              FROM users 
              WHERE username ILIKE $1
@@ -2130,7 +2123,7 @@ app.get('/', (req, res) => {
 app.get('/health', async (req, res) => {
   try {
     // Проверяем подключение к базе данных
-    await pool.query('SELECT 1');
+    await db.query('SELECT 1');
     
     res.json({
       status: 'healthy',
