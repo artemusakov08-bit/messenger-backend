@@ -9,15 +9,17 @@ CREATE TABLE IF NOT EXISTS users (
     profile_image TEXT,
     phone_number VARCHAR(20),
     bio TEXT,
+    birthday VARCHAR(50), 
     created_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW()) * 1000
 );
 
-ALTER TABLE users ADD COLUMN message_notifications BOOLEAN DEFAULT true;
-ALTER TABLE users ADD COLUMN call_notifications BOOLEAN DEFAULT true;
-ALTER TABLE users ADD COLUMN notification_sound BOOLEAN DEFAULT true;
-ALTER TABLE users ADD COLUMN online_status BOOLEAN DEFAULT true;
-ALTER TABLE users ADD COLUMN read_receipts BOOLEAN DEFAULT true;
-ALTER TABLE users ADD COLUMN settings_updated_at TIMESTAMP;
+-- Добавление остальных колонок
+ALTER TABLE users ADD COLUMN IF NOT EXISTS message_notifications BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS call_notifications BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_sound BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS online_status BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS read_receipts BOOLEAN DEFAULT true;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS settings_updated_at TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS calls (
     id VARCHAR(50) PRIMARY KEY,

@@ -1393,11 +1393,10 @@ app.get('/api/users/:userId', async (req, res) => {
 app.put('/api/users/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
-        const { display_name, username, bio, phone } = req.body;
+        const { display_name, username, bio, phone, birthday } = req.body;
 
-        console.log('✏️ Updating profile:', { userId, username });
+        console.log('✏️ Updating profile:', { userId, username, birthday });
 
-        // 🔥 ПРАВИЛЬНАЯ ПРОВЕРКА: 
         const currentUser = await pool.query(
             'SELECT username FROM users WHERE user_id = $1',
             [userId]
@@ -1422,8 +1421,8 @@ app.put('/api/users/:userId', async (req, res) => {
         }
 
         const result = await pool.query(
-            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4 WHERE user_id = $5 RETURNING *',
-            [display_name, username, bio, phone, userId]
+            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone_number = $4, birthday = $5 WHERE user_id = $6 RETURNING *',
+            [display_name, username, bio, phone, birthday, userId] 
         );
 
         if (result.rows.length === 0) {
@@ -1445,7 +1444,7 @@ app.put('/api/users/:userId', async (req, res) => {
         console.error('❌ Error updating profile:', error);
         res.status(500).json({ 
             success: false,
-            error: 'Server error' 
+            error: 'Server error: ' + error.message 
         });
     }
 });
