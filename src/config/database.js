@@ -29,6 +29,7 @@ class Database {
                 statement_timeout: 10000
             });
 
+            // Тестируем подключение
             const client = await this.pool.connect();
             console.log('✅ PostgreSQL подключена успешно');
             client.release();
