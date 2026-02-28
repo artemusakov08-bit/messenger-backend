@@ -1404,7 +1404,7 @@ app.put('/api/users/:userId', async (req, res) => {
         }
 
         const result = await db.query(
-            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone_number = $4, birthday = $5 WHERE user_id = $6 RETURNING *',
+            'UPDATE users SET display_name = $1, username = $2, bio = $3, phone = $4, birthday = $5 WHERE user_id = $6 RETURNING *',
             [display_name, username, bio, phone, birthday, userId] 
         );
 
