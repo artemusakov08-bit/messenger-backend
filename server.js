@@ -4,7 +4,6 @@ console.log('🚀 ===== ЗАПУСК СЕРВЕРА =====');
 console.log('🔑 JWT_SECRET загружен?', !!process.env.JWT_SECRET);
 
 const express = require('express');
-const { Pool } = require('pg');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { Server } = require('socket.io');
@@ -167,15 +166,6 @@ app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
 app.use('/api/call', authMiddleware.authenticate, callRoutes);
 app.use('/api/message', authMiddleware.authenticate, messageRoutes);
 app.use('/api/username', authMiddleware.authenticate, usernameRoutes);
-
-pool.on('connect', () => {
-  console.log('✅ Connected to the database successfully');
-});
-
-pool.on('error', (err) => {
-  console.error('❌ Database error:', err);
-});
-// ==========================================================
 
 // Функция инициализации базы
 async function initializeDatabase() {
