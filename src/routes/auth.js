@@ -73,4 +73,19 @@ router.delete('/sessions', deviceAuthMiddleware.authenticate, (req, res) => {
     authController.endAllSessions(req, res);
 });
 
+// QR код для входа
+router.post('/qr/generate', (req, res) => {
+    authController.generateQR(req, res);
+});
+
+// Проверка статуса QR
+router.get('/qr/status/:qrId', (req, res) => {
+    authController.checkQRStatus(req, res);
+});
+
+// Подтверждение QR с мобильного приложения
+router.post('/qr/confirm', deviceAuthMiddleware.authenticate, (req, res) => {
+    authController.confirmQR(req, res);
+});
+
 module.exports = router;

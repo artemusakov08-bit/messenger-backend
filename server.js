@@ -235,6 +235,23 @@ async function initializeDatabase() {
   }
 
     await db.query(`
+      CREATE TABLE IF NOT EXISTS qr_logins (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50),
+        status VARCHAR(20) DEFAULT 'pending',
+        expires_at TIMESTAMP NOT NULL,
+        confirmed_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        FOREIGN KEY (user_id) REFERENCES users(user_id)
+      )
+    `);
+
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_qr_logins_status ON qr_logins(status);
+      CREATE INDEX IF NOT EXISTS idx_qr_logins_expires ON qr_logins(expires_at);
+    `);
+
+    await db.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         session_id VARCHAR(100) PRIMARY KEY,
         user_id VARCHAR(50) NOT NULL,

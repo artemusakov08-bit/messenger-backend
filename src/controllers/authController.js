@@ -836,6 +836,200 @@ class AuthController {
         }
     }
 
+    // 🎯 Генерация QR кода
+async generateQR(req, res) {
+    try {
+        const QRLogin = require('../models/QRLogin');
+        
+        // Создаем QR-сессию
+        const qrSession = await QRLogin.create();
+        
+        // Генерируем данные для QR
+        const qrData = {
+            type: 'login',
+            qrId: qrSession.id,
+            timestamp: Date.now(),
+            expiresAt: qrSession.expires_at
+        };
+        
+        // Кодируем в base64 для QR
+        const qrString = Buffer.from(JSON.stringify(qrData)).toString('base64');
+        
+        // Генерируем QR код
+        const QRCode = require('qrcode');
+        const qrImage = await QRCode.toDataURL(qrString);
+        
+        res.json({
+            success: true,
+            qrId: qrSession.id,
+            qrImage: qrImage,
+            expiresIn: 300, // 5 минут в секундах
+            expiresAt: qrSession.expires_at
+        });
+        
+    } catch (error) {
+        console.error('❌ Error generating QR:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка генерации QR кода',
+            code: 'QR_GENERATE_ERROR'
+        });
+    }
+}
+
+// 🔍 Проверка статуса QR
+async checkQRStatus(req, res) {
+    try {
+        const { qrId } = req.params;
+        const QRLogin = require('../models/QRLogin');
+        
+        const qrSession = await QRLogin.findById(qrId);
+        
+        if (!qrSession) {
+            return res.status(404).json({
+                success: false,
+                error: 'QR код не найден',
+                code: 'QR_NOT_FOUND'
+            });
+        }
+        
+        // Проверяем, не истек ли
+        if (new Date() > new Date(qrSession.expires_at)) {
+            return res.json({
+                success: true,
+                status: 'expired',
+                message: 'QR код истек'
+            });
+        }
+        
+        // Если подтвержден - возвращаем токен для входа
+        if (qrSession.status === 'confirmed' && qrSession.user_id) {
+            // Создаем сессию для пользователя
+            const user = await User.findById(qrSession.user_id);
+            
+            const sessionResult = await SessionService.createUserSession(
+                {
+                    userId: user.user_id,
+                    phone: user.phone,
+                    username: user.username,
+                    displayName: user.display_name
+                },
+                {
+                    deviceId: 'web_' + Date.now(),
+                    deviceName: 'Web Browser',
+                    os: 'Web',
+                    deviceInfo: { browser: req.headers['user-agent'] }
+                },
+                req.ip
+            );
+            
+            return res.json({
+                success: true,
+                status: 'confirmed',
+                session: sessionResult.session,
+                tokens: sessionResult.tokens,
+                user: {
+                    id: user.user_id,
+                    phone: user.phone,
+                    username: user.username,
+                    displayName: user.display_name,
+                    role: user.role
+                }
+            });
+        }
+        
+        // Все еще ждем подтверждения
+        res.json({
+            success: true,
+            status: 'pending',
+            message: 'Ожидание сканирования'
+        });
+        
+    } catch (error) {
+        console.error('❌ Error checking QR status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка проверки статуса',
+            code: 'QR_STATUS_ERROR'
+        });
+    }
+}
+
+// 📱 Подтверждение QR с мобильного приложения
+async confirmQR(req, res) {
+    try {
+        const { qrId } = req.body;
+        const { userId } = req.user; // из deviceAuthMiddleware
+        
+        if (!qrId) {
+            return res.status(400).json({
+                success: false,
+                error: 'QR ID обязателен',
+                code: 'QR_ID_REQUIRED'
+            });
+        }
+        
+        const QRLogin = require('../models/QRLogin');
+        
+        const qrSession = await QRLogin.findById(qrId);
+        
+        if (!qrSession) {
+            return res.status(404).json({
+                success: false,
+                error: 'QR код не найден',
+                code: 'QR_NOT_FOUND'
+            });
+        }
+        
+        // Проверяем, не истек ли
+        if (new Date() > new Date(qrSession.expires_at)) {
+            return res.json({
+                success: false,
+                error: 'QR код истек',
+                code: 'QR_EXPIRED'
+            });
+        }
+        
+        // Проверяем, не был ли уже подтвержден
+        if (qrSession.status === 'confirmed') {
+            return res.json({
+                success: false,
+                error: 'QR код уже использован',
+                code: 'QR_ALREADY_USED'
+            });
+        }
+        
+        // Подтверждаем QR
+        const confirmed = await QRLogin.updateStatus(qrId, userId, 'confirmed');
+        
+        // Получаем информацию о пользователе для уведомления
+        const user = await User.findById(userId);
+        
+        // Уведомляем через WebSocket
+        const { getNotificationSocket } = require('../sockets/notificationSocket');
+        const notificationSocket = getNotificationSocket();
+        
+        notificationSocket.io.to(`qr:${qrId}`).emit('qr_confirmed', {
+            success: true,
+            userName: user.display_name
+        });
+        
+        res.json({
+            success: true,
+            message: 'QR код подтвержден',
+            qrId: confirmed.id
+        });
+        
+    } catch (error) {
+        console.error('❌ Error confirming QR:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Ошибка подтверждения QR',
+            code: 'QR_CONFIRM_ERROR'
+        });
+    }
+}
+
     // 🆕 Создание сессии устройства
     async createDeviceSession(req, res) {
         const client = await db.getClient();
