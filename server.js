@@ -14,6 +14,8 @@ const { initializeNotificationSocket } = require('./src/sockets/notificationSock
 const NotificationService = require('./src/services/NotificationService');
 const authMiddleware = require('./src/middleware/authMiddleware');
 const WebSocket = require('ws');
+const path = require('path');
+const uploadRoutes = require('./src/routes/upload');
 
 // 🔥 ПОДКЛЮЧАЕМ КОНТРОЛЛЕРЫ
 const authRoutes = require('./src/routes/auth');
@@ -149,6 +151,8 @@ app.use((req, res, next) => {
 });
 
 // 🔥 ПОДКЛЮЧАЕМ РОУТЫ
+app.use('/api/upload', uploadRoutes);
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/api/auth', authRoutes);
 const securityRoutes = require('./src/routes/security');
 app.use('/api/security', securityRoutes);
@@ -233,6 +237,12 @@ async function initializeDatabase() {
           console.log(`⚠️  Колонка уже существует: ${column.split(' ')[0]}`);
       }
   }
+
+    await db.query(`
+        ALTER TABLE users 
+        ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+    `);
 
     await db.query(`
       CREATE TABLE IF NOT EXISTS qr_logins (
