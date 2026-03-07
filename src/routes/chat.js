@@ -15,12 +15,14 @@ router.get('/saved', async (req, res) => {
         
         console.log('⭐ Getting saved messages for user:', userId);
         
+        // Создаем уникальный ID для чата "Избранное" на основе userId
+        const savedChatId = `saved_${userId}`;
+        
         // Проверяем, есть ли уже чат "Избранное"
         const existingChat = await pool.query(
             `SELECT * FROM chats 
-             WHERE type = 'saved' 
-             AND participants @> $1::jsonb`,
-            [JSON.stringify([userId])]
+             WHERE id = $1`,
+            [savedChatId]
         );
         
         if (existingChat.rows.length > 0) {
@@ -31,17 +33,16 @@ router.get('/saved', async (req, res) => {
         }
         
         // Создаем новый чат "Избранное"
-        const chatId = 'saved_' + userId + '_' + Date.now();
-        const chatName = 'Избранное';
+        const timestamp = Date.now();
         
         const result = await pool.query(
-            `INSERT INTO chats (id, name, type, participants, created_at)
-             VALUES ($1, $2, $3, $4::jsonb, NOW()) 
+            `INSERT INTO chats (id, name, type, timestamp)
+             VALUES ($1, $2, $3, $4) 
              RETURNING *`,
-            [chatId, chatName, 'saved', JSON.stringify([userId])]
+            [savedChatId, 'Избранное', 'saved', timestamp]
         );
         
-        console.log('✅ Saved messages chat created:', chatId);
+        console.log('✅ Saved messages chat created:', savedChatId);
         
         res.json({ 
             success: true, 
