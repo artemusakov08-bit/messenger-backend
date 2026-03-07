@@ -7,6 +7,56 @@ const authMiddleware = require('../middleware/authMiddleware');
 // 🔐 ВСЕ РОУТЫ ТРЕБУЮТ АВТОРИЗАЦИИ
 router.use(authMiddleware.authenticate);
 
+// ⭐ ПОЛУЧИТЬ/СОЗДАТЬ ЧАТ "ИЗБРАННОЕ"
+router.get('/saved', async (req, res) => {
+    try {
+        const userId = req.user.user_id;
+        const pool = require('../config/database');
+        
+        console.log('⭐ Getting saved messages for user:', userId);
+        
+        // Проверяем, есть ли уже чат "Избранное"
+        const existingChat = await pool.query(
+            `SELECT * FROM chats 
+             WHERE type = 'saved' 
+             AND participants @> $1::jsonb`,
+            [JSON.stringify([userId])]
+        );
+        
+        if (existingChat.rows.length > 0) {
+            return res.json({ 
+                success: true, 
+                chat: existingChat.rows[0] 
+            });
+        }
+        
+        // Создаем новый чат "Избранное"
+        const chatId = 'saved_' + userId + '_' + Date.now();
+        const chatName = 'Избранное';
+        
+        const result = await pool.query(
+            `INSERT INTO chats (id, name, type, participants, created_at)
+             VALUES ($1, $2, $3, $4::jsonb, NOW()) 
+             RETURNING *`,
+            [chatId, chatName, 'saved', JSON.stringify([userId])]
+        );
+        
+        console.log('✅ Saved messages chat created:', chatId);
+        
+        res.json({ 
+            success: true, 
+            chat: result.rows[0] 
+        });
+        
+    } catch (error) {
+        console.error('❌ Error creating saved messages:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка при создании избранного' 
+        });
+    }
+});
+
 // 📱 ПОЛУЧИТЬ ЧАТЫ ТЕКУЩЕГО ПОЛЬЗОВАТЕЛЯ
 router.get('/my-chats', async (req, res) => {
     try {
@@ -123,7 +173,6 @@ router.get('/group/:groupId', async (req, res) => {
             });
         }
         
-        // Получаем участников группы
         const membersResult = await pool.query(
             `SELECT u.user_id, u.display_name, u.username, u.profile_image, gm.role, gm.joined_at
              FROM group_members gm
@@ -161,14 +210,14 @@ router.get('/group/:groupId', async (req, res) => {
 router.get('/find-user/:phone', async (req, res) => {
     try {
         const { phone } = req.params;
-        const currentUserId = req.user.user_id; // Текущий авторизованный пользователь
+        const currentUserId = req.user.user_id;
         
         console.log('🔍 Finding user for chat by phone:', phone);
 
         const pool = require('../config/database');
         const result = await pool.query(
             'SELECT user_id, display_name, phone, status, profile_image FROM users WHERE phone = $1 AND user_id != $2',
-            [phone, currentUserId] // Исключаем текущего пользователя
+            [phone, currentUserId]
         );
         
         if (result.rows.length === 0) {
