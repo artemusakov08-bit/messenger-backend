@@ -71,6 +71,41 @@ router.get('/my-chats', async (req, res) => {
     }
 });
 
+// 🔍 ПОИСК ЧАТОВ
+router.get('/search', async (req, res) => {
+    try {
+        const { query } = req.query;
+        const userId = req.user.user_id;
+        const pool = require('../config/database');
+        
+        console.log('🔍 Searching chats with query:', query);
+        
+        if (!query || query.length < 2) {
+            return res.json({ chats: [] });
+        }
+        
+        // Ищем чаты, где участвует пользователь и название содержит запрос
+        const result = await pool.query(
+            `SELECT c.* FROM chats c
+             WHERE c.name ILIKE $1 
+             AND c.type != 'saved'`,
+            [`%${query}%`]
+        );
+        
+        res.json({ 
+            success: true,
+            chats: result.rows 
+        });
+        
+    } catch (error) {
+        console.error('❌ Error searching chats:', error);
+        res.status(500).json({ 
+            success: false,
+            error: 'Ошибка поиска чатов' 
+        });
+    }
+});
+
 // 👥 ПОЛУЧИТЬ ГРУППЫ
 router.get('/groups', async (req, res) => {
     try {
