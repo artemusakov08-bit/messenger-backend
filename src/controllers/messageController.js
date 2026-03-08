@@ -449,7 +449,6 @@ const addReaction = async (req, res) => {
     
     if (!reaction) {
       return res.status(400).json({ error: 'Reaction already exists' });
-    }eturn res.status(400).json({ error: 'Reaction already exists' });
     }
     
     // Получаем обновленные реакции
