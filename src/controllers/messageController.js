@@ -445,14 +445,19 @@ const addReaction = async (req, res) => {
     console.log(`😊 Добавление реакции ${emoji} к сообщению ${messageId} от ${userId}`);
     
     const Reaction = require('../models/Reaction');
+    console.log('✅ Reaction model loaded');
+    
     const reaction = await Reaction.add(messageId, userId, emoji);
+    console.log('✅ Reaction.add result:', reaction);
     
     if (!reaction) {
+      console.log('⚠️ Reaction already exists');
       return res.status(400).json({ error: 'Reaction already exists' });
     }
     
     // Получаем обновленные реакции
     const reactions = await Reaction.getForMessage(messageId);
+    console.log('✅ Updated reactions:', reactions);
     
     // Уведомляем участников чата
     const messageResult = await pool.query(
@@ -463,6 +468,7 @@ const addReaction = async (req, res) => {
     if (messageResult.rows.length > 0) {
       const chatId = messageResult.rows[0].chat_id;
       const participants = extractParticipantIds(chatId);
+      console.log('👥 Participants:', participants);
       
       participants.forEach(participantId => {
         if (String(participantId) !== String(userId) && chatSocketInstance) {
