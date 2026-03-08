@@ -432,6 +432,11 @@ const getMissedMessages = async (req, res) => {
 
 // 😊 Добавление реакции
 const addReaction = async (req, res) => {
+  console.log('🔥 addReaction CALLED');
+  console.log('📦 req.params:', req.params);
+  console.log('📦 req.body:', req.body);
+  console.log('👤 req.user:', req.user);
+  
   try {
     const { messageId } = req.params;
     const { emoji } = req.body;
@@ -444,6 +449,7 @@ const addReaction = async (req, res) => {
     
     if (!reaction) {
       return res.status(400).json({ error: 'Reaction already exists' });
+    }eturn res.status(400).json({ error: 'Reaction already exists' });
     }
     
     // Получаем обновленные реакции

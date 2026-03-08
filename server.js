@@ -360,7 +360,7 @@ async function initializeDatabase() {
       )
     `);
 
-    // Добавляем индексы для новых полей
+    // Добавляем индексы
     await db.query(`
       CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id);
       CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
