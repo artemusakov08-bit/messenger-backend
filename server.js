@@ -492,6 +492,60 @@ async function initializeDatabase() {
 
     console.log('✅ All database tables created/verified');
     
+    // Проверка таблицы реакций
+    try {
+      console.log('🔍 Checking message_reactions table...');
+  
+      const result = await db.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'message_reactions'
+        );
+      `);
+  
+      const tableExists = result.rows[0].exists;
+      console.log('📊 Table message_reactions exists?', tableExists);
+  
+      if (tableExists) {
+        const columns = await db.query(`
+          SELECT column_name, data_type 
+          FROM information_schema.columns 
+          WHERE table_name = 'message_reactions'
+          ORDER BY ordinal_position
+        `);
+        console.log('📋 Table structure:');
+        columns.rows.forEach(col => {
+          console.log(`   - ${col.column_name}: ${col.data_type}`);
+        });
+    
+        // Проверяем количество записей
+        const count = await db.query('SELECT COUNT(*) FROM message_reactions');
+        console.log(`🔢 Total reactions: ${count.rows[0].count}`);
+      } else {
+        console.log('⚠️ Table message_reactions does not exist! Creating...');
+    
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS message_reactions (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            emoji VARCHAR(10) NOT NULL,
+            created_at BIGINT,
+            UNIQUE(message_id, user_id, emoji)
+          )
+        `);
+    
+        await db.query(`
+          CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
+          CREATE INDEX IF NOT EXISTS idx_reactions_user ON message_reactions(user_id);
+        `);
+    
+        console.log('✅ Table message_reactions created');
+      }
+    } catch (error) {
+      console.error('❌ Error checking message_reactions:', error.message);
+    }
+
     try {
       console.log('🔄 Проверка наличия колонок в user_security...');
   
