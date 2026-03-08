@@ -167,7 +167,7 @@ app.use('/api/session', sessionRoutes);
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
 app.use('/api/chat', authMiddleware.authenticate, chatRoutes);
 app.use('/api/call', authMiddleware.authenticate, callRoutes);
-app.use('/api/message', authMiddleware.authenticate, messageRoutes);
+app.use('/api/messages', authMiddleware.authenticate, messageRoutes);
 app.use('/api/username', authMiddleware.authenticate, usernameRoutes);
 
 // Функция инициализации базы
@@ -1091,26 +1091,6 @@ app.get('/api/users/:userId/status', async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
-});
-
-// ==================== 💬 ПОЛУЧИТЬ СООБЩЕНИЯ ЧАТА ====================
-app.get('/api/messages/chat/:chatId', authMiddleware.authenticate, async (req, res) => {
-  try {
-    const { chatId } = req.params;
-    console.log(`📥 Loading messages for chat: ${chatId}`);
-    
-    const result = await db.query(
-      'SELECT * FROM messages WHERE chat_id = $1 ORDER BY timestamp ASC',
-      [chatId]
-    );
-    
-    console.log(`✅ Loaded ${result.rows.length} messages`);
-    res.json(result.rows);
-    
-  } catch (error) {
-    console.error('❌ Error loading messages:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
 });
 
 // 🔧 ЭНДПОИНТ ДЛЯ ПОИСКА ПОЛЬЗОВАТЕЛЯ ПО ТЕЛЕФОНУ
