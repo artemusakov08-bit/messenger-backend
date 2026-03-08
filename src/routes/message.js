@@ -27,6 +27,37 @@ router.post('/read',
     messageController.markMessageAsRead
 );
 
+// 😊 Реакции
+router.post('/:messageId/reactions',
+    [
+        validationMiddleware.sanitizeInput()
+    ],
+    messageController.addReaction
+);
+
+router.delete('/:messageId/reactions/:emoji',
+    [
+        validationMiddleware.sanitizeInput()
+    ],
+    messageController.removeReaction
+);
+
+// 📥 Пересылка
+router.post('/forward',
+    [
+        validationMiddleware.sanitizeInput()
+    ],
+    messageController.forwardMessage
+);
+
+// 📝 Ответ
+router.post('/reply',
+    [
+        validationMiddleware.sanitizeInput()
+    ],
+    messageController.replyToMessage
+);
+
 // ✏️ Редактирование сообщения
 router.put('/edit/:messageId',
     [

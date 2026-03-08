@@ -430,8 +430,263 @@ const getMissedMessages = async (req, res) => {
     }
 };
 
+// 😊 Добавление реакции
+const addReaction = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    const { emoji } = req.body;
+    const { userId } = req.user;
+    
+    console.log(`😊 Добавление реакции ${emoji} к сообщению ${messageId} от ${userId}`);
+    
+    const Reaction = require('../models/Reaction');
+    const reaction = await Reaction.add(messageId, userId, emoji);
+    
+    if (!reaction) {
+      return res.status(400).json({ error: 'Reaction already exists' });
+    }
+    
+    // Получаем обновленные реакции
+    const reactions = await Reaction.getForMessage(messageId);
+    
+    // Уведомляем участников чата
+    const messageResult = await pool.query(
+      'SELECT chat_id FROM messages WHERE id = $1',
+      [messageId]
+    );
+    
+    if (messageResult.rows.length > 0) {
+      const chatId = messageResult.rows[0].chat_id;
+      const participants = extractParticipantIds(chatId);
+      
+      participants.forEach(participantId => {
+        if (String(participantId) !== String(userId) && chatSocketInstance) {
+          chatSocketInstance.sendToUser(participantId, {
+            type: 'reaction_added',
+            messageId,
+            emoji,
+            userId,
+            reactions,
+            timestamp: Date.now()
+          });
+        }
+      });
+    }
+    
+    res.json({
+      success: true,
+      reaction,
+      reactions
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка добавления реакции:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// ❌ Удаление реакции
+const removeReaction = async (req, res) => {
+  try {
+    const { messageId, emoji } = req.params;
+    const { userId } = req.user;
+    
+    console.log(`❌ Удаление реакции ${emoji} от сообщения ${messageId} пользователем ${userId}`);
+    
+    const Reaction = require('../models/Reaction');
+    const removed = await Reaction.remove(messageId, userId, emoji);
+    
+    if (!removed) {
+      return res.status(404).json({ error: 'Reaction not found' });
+    }
+    
+    // Получаем обновленные реакции
+    const reactions = await Reaction.getForMessage(messageId);
+    
+    // Уведомляем участников чата
+    const messageResult = await pool.query(
+      'SELECT chat_id FROM messages WHERE id = $1',
+      [messageId]
+    );
+    
+    if (messageResult.rows.length > 0) {
+      const chatId = messageResult.rows[0].chat_id;
+      const participants = extractParticipantIds(chatId);
+      
+      participants.forEach(participantId => {
+        if (String(participantId) !== String(userId) && chatSocketInstance) {
+          chatSocketInstance.sendToUser(participantId, {
+            type: 'reaction_removed',
+            messageId,
+            emoji,
+            userId,
+            reactions,
+            timestamp: Date.now()
+          });
+        }
+      });
+    }
+    
+    res.json({
+      success: true,
+      reactions
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка удаления реакции:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 📥 Пересылка сообщения
+const forwardMessage = async (req, res) => {
+  const connection = await pool.connect();
+  
+  try {
+    await connection.query('BEGIN');
+    
+    const { messageId, toChatId } = req.body;
+    const { userId } = req.user;
+    
+    console.log(`📥 Пересылка сообщения ${messageId} в чат ${toChatId} пользователем ${userId}`);
+    
+    // Получаем исходное сообщение
+    const sourceMessage = await connection.query(
+      'SELECT * FROM messages WHERE id = $1',
+      [messageId]
+    );
+    
+    if (sourceMessage.rows.length === 0) {
+      await connection.query('ROLLBACK');
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    const original = sourceMessage.rows[0];
+    
+    // Создаем новое сообщение с пометкой forwarded
+    const newMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    const timestamp = Date.now();
+    
+    const forwardText = `⏩ Пересланное сообщение от ${original.sender_name}:\n\n${original.text}`;
+    
+    const result = await connection.query(
+      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type, forwarded, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [newMessageId, toChatId, forwardText, userId, original.sender_name, timestamp, original.type, true, messageId]
+    );
+    
+    // Обновляем время последнего сообщения в чате
+    await connection.query(
+      'UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3',
+      [timestamp, forwardText, toChatId]
+    );
+    
+    await connection.query('COMMIT');
+    
+    const newMessage = result.rows[0];
+    
+    // Уведомляем участников чата
+    const participants = extractParticipantIds(toChatId);
+    participants.forEach(participantId => {
+      if (String(participantId) !== String(userId) && chatSocketInstance) {
+        chatSocketInstance.sendToUser(participantId, {
+          type: 'new_message',
+          chatId: toChatId,
+          message: newMessage,
+          timestamp: Date.now()
+        });
+      }
+    });
+    
+    res.status(201).json({
+      success: true,
+      message: newMessage
+    });
+    
+  } catch (error) {
+    await connection.query('ROLLBACK');
+    console.error('❌ Ошибка пересылки сообщения:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
+// 📝 Ответ на сообщение
+const replyToMessage = async (req, res) => {
+  const connection = await pool.connect();
+  
+  try {
+    await connection.query('BEGIN');
+    
+    const { replyToId, text, chatId } = req.body;
+    const { userId } = req.user;
+    
+    console.log(`📝 Ответ на сообщение ${replyToId} пользователем ${userId}`);
+    
+    // Получаем имя отправителя
+    const userResult = await connection.query(
+      'SELECT display_name FROM users WHERE user_id = $1',
+      [userId]
+    );
+    
+    const senderName = userResult.rows[0]?.display_name || 'User';
+    
+    // Создаем сообщение-ответ
+    const messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    const timestamp = Date.now();
+    
+    const result = await connection.query(
+      `INSERT INTO messages (id, chat_id, text, sender_id, sender_name, timestamp, type, reply_to_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [messageId, chatId, text, userId, senderName, timestamp, 'text', replyToId]
+    );
+    
+    // Обновляем чат
+    await connection.query(
+      'UPDATE chats SET timestamp = $1, last_message = $2 WHERE id = $3',
+      [timestamp, text, chatId]
+    );
+    
+    await connection.query('COMMIT');
+    
+    const newMessage = result.rows[0];
+    
+    // Уведомляем участников
+    const participants = extractParticipantIds(chatId);
+    participants.forEach(participantId => {
+      if (String(participantId) !== String(userId) && chatSocketInstance) {
+        chatSocketInstance.sendToUser(participantId, {
+          type: 'new_message',
+          chatId,
+          message: newMessage,
+          timestamp: Date.now()
+        });
+      }
+    });
+    
+    res.status(201).json({
+      success: true,
+      message: newMessage
+    });
+    
+  } catch (error) {
+    await connection.query('ROLLBACK');
+    console.error('❌ Ошибка ответа на сообщение:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    connection.release();
+  }
+};
+
 module.exports = {
     sendMessage,
+      addReaction,
+      removeReaction,
+      forwardMessage,
+      replyToMessage,
     getChatMessages: async (req, res) => {
         try {
             const { chatId } = req.params;

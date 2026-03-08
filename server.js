@@ -348,10 +348,42 @@ async function initializeDatabase() {
         sender_id TEXT NOT NULL,
         sender_name TEXT NOT NULL,
         timestamp BIGINT,
-        type TEXT DEFAULT 'text'
+        type TEXT DEFAULT 'text',
+        status TEXT DEFAULT 'sent',
+        edited BOOLEAN DEFAULT false,
+        edited_at BIGINT,
+        forwarded BOOLEAN DEFAULT false,
+        reply_to_id TEXT,
+        read BOOLEAN DEFAULT false,
+        read_at BIGINT,
+        delivered BOOLEAN DEFAULT false,
+        delivered_at BIGINT
       )
     `);
+
+    // Добавляем индексы для новых полей
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+      CREATE INDEX IF NOT EXISTS idx_messages_read ON messages(read) WHERE read = false;
+    `);
     
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS message_reactions (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+        emoji VARCHAR(10) NOT NULL,
+        created_at BIGINT,
+        UNIQUE(message_id, user_id, emoji)
+      )
+    `);
+
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_reactions_message ON message_reactions(message_id);
+      CREATE INDEX IF NOT EXISTS idx_reactions_user ON message_reactions(user_id);
+    `);
+
     await db.query(`
       CREATE TABLE IF NOT EXISTS groups (
         id TEXT PRIMARY KEY,
