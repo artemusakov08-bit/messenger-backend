@@ -2,25 +2,31 @@
 
 class Reaction {
   // Добавить реакцию
-  static async add(messageId, userId, emoji) {
-    const client = await pool.connect();
-    try {
-      const id = `reaction_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-      const timestamp = Date.now();
-      
-      const result = await client.query(
-        `INSERT INTO message_reactions (id, message_id, user_id, emoji, created_at)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (message_id, user_id, emoji) DO NOTHING
-         RETURNING *`,
-        [id, messageId, userId, emoji, timestamp]
-      );
-      
-      return result.rows[0];
-    } finally {
-      client.release();
+    static async add(messageId, userId, emoji) {
+      const client = await pool.connect();
+      try {
+        const id = `reaction_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+        const timestamp = Date.now();
+    
+        console.log('📝 Attempting to add reaction:', { messageId, userId, emoji, id, timestamp });
+    
+        const result = await client.query(
+          `INSERT INTO message_reactions (id, message_id, user_id, emoji, created_at)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (message_id, user_id, emoji) DO NOTHING
+           RETURNING *`,
+          [id, messageId, userId, emoji, timestamp]
+        );
+    
+        console.log('✅ Query result:', result.rows[0]);
+        return result.rows[0];
+      } catch (error) {
+        console.error('❌ Database error in add reaction:', error);
+        throw error;
+      } finally {
+        client.release();
+      }
     }
-  }
 
   // Удалить реакцию
   static async remove(messageId, userId, emoji) {
