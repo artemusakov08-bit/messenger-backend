@@ -422,16 +422,6 @@ async function initializeDatabase() {
     `);
 
     await db.query(`
-      CREATE TABLE IF NOT EXISTS groups (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        created_by TEXT NOT NULL,
-        created_at BIGINT
-      )
-    `);
-    
-    await db.query(`
       CREATE TABLE IF NOT EXISTS group_members (
         group_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
