@@ -1,7 +1,6 @@
 ﻿const pool = require('../config/database');
 const Group = require('../models/Group');
 const GroupMember = require('../models/GroupMember');
-const Message = require('../models/Message');
 
 let chatSocketInstance = null;
 
