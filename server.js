@@ -23,6 +23,8 @@ const db = require('./src/config/database');
 const chatRoutes = require('./src/routes/chat');
 const callRoutes = require('./src/routes/call');
 const messageRoutes = require('./src/routes/message');
+const groupRoutes = require('./src/routes/group');
+const groupController = require('./src/controllers/groupController');
 
 const sessionRoutes = require('./src/routes/session');
 
@@ -55,6 +57,7 @@ const chatSocket = new ChatSocket(wss);
 const messageController = require('./src/controllers/messageController');
 messageController.setSyncService(syncService);
 messageController.setChatSocket(chatSocket);
+groupController.setChatSocket(chatSocket);
 
 // Socket.IO подключения
 io.on('connection', (socket) => {
@@ -162,6 +165,7 @@ const usernameRoutes = require('./src/routes/username');
 app.use('/api/username', usernameRoutes);
 app.use('/api/moderation', moderationRoutes);
 app.use('/api/session', sessionRoutes); 
+app.use('/api/groups', authMiddleware.authenticate, groupRoutes);
 
 
 // 🔒 ЗАЩИЩЕННЫЕ РОУТЫ (требуют авторизации)
@@ -178,6 +182,40 @@ async function initializeDatabase() {
     // Подключаемся к базе
     await db.connect();
     
+    // Таблица групп
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            created_by TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            avatar_url TEXT,
+            is_private BOOLEAN DEFAULT false,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )
+    `);
+
+    // Таблица участников групп
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS group_members (
+            group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
+            user_id TEXT REFERENCES users(user_id) ON DELETE CASCADE,
+            role TEXT DEFAULT 'member',
+            joined_at BIGINT NOT NULL,
+            PRIMARY KEY (group_id, user_id)
+        )
+    `);
+
+    // Индексы
+    await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
+        CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+        CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
+    `);
+
+    console.log('✅ Group tables created');
+
     // 🔥 СОЗДАНИЕ ТАБЛИЦЫ ПОЛЬЗОВАТЕЛЕЙ 
     await db.query(`
         CREATE TABLE IF NOT EXISTS users (
