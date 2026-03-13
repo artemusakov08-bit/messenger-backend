@@ -181,39 +181,7 @@ async function initializeDatabase() {
     
     // Подключаемся к базе
     await db.connect();
-    
-    // Таблица групп
-    await db.query(`
-        CREATE TABLE IF NOT EXISTS groups (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            description TEXT,
-            created_by TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-            avatar_url TEXT,
-            is_private BOOLEAN DEFAULT false,
-            created_at BIGINT NOT NULL,
-            updated_at BIGINT NOT NULL
-        )
-    `);
-
-    // Таблица участников групп
-    await db.query(`
-        CREATE TABLE IF NOT EXISTS group_members (
-            group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
-            user_id TEXT REFERENCES users(user_id) ON DELETE CASCADE,
-            role TEXT DEFAULT 'member',
-            joined_at BIGINT NOT NULL,
-            PRIMARY KEY (group_id, user_id)
-        )
-    `);
-
-    // Индексы
-    await db.query(`
-        CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
-        CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
-        CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
-    `);
-
+   
     console.log('✅ Group tables created');
 
     // 🔥 СОЗДАНИЕ ТАБЛИЦЫ ПОЛЬЗОВАТЕЛЕЙ 
@@ -501,6 +469,38 @@ async function initializeDatabase() {
       )
     `);
     
+    // Таблица групп
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS groups (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            created_by TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            avatar_url TEXT,
+            is_private BOOLEAN DEFAULT false,
+            created_at BIGINT NOT NULL,
+            updated_at BIGINT NOT NULL
+        )
+    `);
+
+    // Таблица участников групп
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS group_members (
+            group_id TEXT REFERENCES groups(id) ON DELETE CASCADE,
+            user_id TEXT REFERENCES users(user_id) ON DELETE CASCADE,
+            role TEXT DEFAULT 'member',
+            joined_at BIGINT NOT NULL,
+            PRIMARY KEY (group_id, user_id)
+        )
+    `);
+
+    // Индексы
+    await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_groups_created_by ON groups(created_by);
+        CREATE INDEX IF NOT EXISTS idx_group_members_user ON group_members(user_id);
+        CREATE INDEX IF NOT EXISTS idx_group_members_group ON group_members(group_id);
+    `);
+
     await db.query(`
       CREATE TABLE IF NOT EXISTS audit_logs (
         id VARCHAR(50) PRIMARY KEY,
