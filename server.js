@@ -575,6 +575,16 @@ async function initializeDatabase() {
     }
 
     try {
+        await db.query(`
+            ALTER TABLE group_members 
+            ADD COLUMN IF NOT EXISTS joined_at BIGINT
+        `);
+        console.log('✅ Added joined_at column to group_members table');
+    } catch (error) {
+        console.log('⚠️ Could not add joined_at column:', error.message);
+    }
+
+    try {
       console.log('🔄 Проверка наличия колонок в user_security...');
   
       const securityColumns = [
