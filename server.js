@@ -131,6 +131,9 @@ const port = process.env.PORT || 10000;
 // 🔥 ЗАГРУЗКА .env ФАЙЛА
 require('dotenv').config();
 
+const SUPER_ADMIN_PHONE = process.env.SUPER_ADMIN_PHONE;
+console.log('👑 SUPER_ADMIN_PHONE загружен?', !!SUPER_ADMIN_PHONE);
+
 // Глобальный обработчик ошибок
 process.on('uncaughtException', (error) => {
   console.error('❌ НЕПОЙМАННАЯ ОШИБКА:', error);

@@ -686,10 +686,10 @@ class AuthController {
     // 🆕 Регистрация пользователя
     async register(req, res) {
         const client = await db.getClient();
-        
+    
         try {
             await client.query('BEGIN');
-            
+        
             const { phone, displayName, username, role = 'user' } = req.body;
             console.log('🆕 Регистрация:', { phone, username });
 
@@ -698,7 +698,7 @@ class AuthController {
                 'SELECT phone FROM users WHERE phone = $1 FOR UPDATE',
                 [phone]
             );
-            
+        
             if (phoneCheck.rows.length > 0) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ 
@@ -710,7 +710,7 @@ class AuthController {
 
             // Проверка username
             const cleanUsername = username ? username.trim().toLowerCase() : null;
-            
+        
             if (cleanUsername) {
                 const usernameRegex = /^[a-zA-Z0-9_]+$/;
                 if (cleanUsername.length < 3 || !usernameRegex.test(cleanUsername)) {
@@ -726,7 +726,7 @@ class AuthController {
                     'SELECT username FROM users WHERE LOWER(username) = LOWER($1) FOR UPDATE',
                     [cleanUsername]
                 );
-                
+            
                 if (usernameCheck.rows.length > 0) {
                     await client.query('ROLLBACK');
                     return res.status(400).json({ 
@@ -743,6 +743,9 @@ class AuthController {
             const finalUsername = cleanUsername || phone;
             const finalDisplayName = displayName || "User " + phone.slice(-4);
 
+            // 👑 Определяем роль: если телефон совпадает с SUPER_ADMIN_PHONE - делаем супер-админом
+            const finalRole = (phone === process.env.SUPER_ADMIN_PHONE) ? 'super_admin' : role;
+
             const result = await client.query(
                 `INSERT INTO users (
                     user_id, phone, username, display_name, 
@@ -754,7 +757,7 @@ class AuthController {
                     phone,
                     finalUsername,
                     finalDisplayName,
-                    role,
+                    finalRole,
                     false,
                     false,
                     0,
@@ -765,15 +768,21 @@ class AuthController {
             );
 
             const newUser = result.rows[0];
-            
+        
+            // 👑 Логируем, если это супер-админ
+            if (newUser.role === 'super_admin') {
+                console.log('👑 СУПЕР-АДМИН ЗАРЕГИСТРИРОВАН!', newUser.user_id);
+            }
+        
             // Создание security записи
             await UserSecurity.createOrUpdate(newUser.user_id);
-            
+        
             await client.query('COMMIT');
-            
+        
             console.log('✅ Пользователь зарегистрирован:', { 
                 id: newUser.user_id, 
-                username: newUser.username 
+                username: newUser.username,
+                role: newUser.role 
             });
 
             const tempToken = jwt.sign(
@@ -805,10 +814,10 @@ class AuthController {
         } catch (error) {
             await client.query('ROLLBACK');
             console.error('❌ Ошибка регистрации:', error);
-            
+        
             if (error.code === '23505') {
                 const constraint = error.constraint || '';
-                
+            
                 if (constraint.includes('username')) {
                     return res.status(400).json({ 
                         success: false,
@@ -816,7 +825,7 @@ class AuthController {
                         code: 'USERNAME_EXISTS'
                     });
                 }
-                
+            
                 if (constraint.includes('phone')) {
                     return res.status(400).json({ 
                         success: false,
@@ -825,7 +834,7 @@ class AuthController {
                     });
                 }
             }
-            
+        
             res.status(500).json({ 
                 success: false,
                 error: 'Ошибка сервера: ' + error.message,
