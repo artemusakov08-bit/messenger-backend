@@ -1,77 +1,74 @@
-const pool = require('../config/database');
+﻿const pool = require('../config/database');
 
-class Report {
-    static async getPriorityQueue(limit = 50) {
+class AuditLog {
+    // Создать запись в логе
+    static async create(logData) {
+        const { userId, action, targetType, targetId, details, ipAddress, userAgent } = logData;
+        const id = `log_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+        const createdAt = Date.now();
+
         const result = await pool.query(
-            `SELECT r.*, 
-                    reporter.display_name as reporter_name,
-                    reported.display_name as reported_name
-             FROM reports r
-             LEFT JOIN users reporter ON r.reporter_id = reporter.user_id
-             LEFT JOIN users reported ON r.reported_user_id = reported.user_id
-             WHERE r.status = 'pending'
-             ORDER BY r.created_at ASC
-             LIMIT $1`,
-            [limit]
+            `INSERT INTO audit_logs (id, user_id, action, target_type, target_id, details, ip_address, user_agent, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+            [id, userId, action, targetType, targetId, JSON.stringify(details), ipAddress, userAgent, createdAt]
+        );
+
+        return result.rows[0];
+    }
+
+    // Получить логи пользователя
+    static async getByUser(userId, limit = 100) {
+        const result = await pool.query(
+            `SELECT * FROM audit_logs 
+             WHERE user_id = $1 
+             ORDER BY created_at DESC 
+             LIMIT $2`,
+            [userId, limit]
         );
         return result.rows;
     }
 
-    static async findById(id) {
+    // Получить логи по типу
+    static async getByType(targetType, targetId, limit = 50) {
         const result = await pool.query(
-            'SELECT * FROM reports WHERE id = $1',
-            [id]
+            `SELECT * FROM audit_logs 
+             WHERE target_type = $1 AND target_id = $2 
+             ORDER BY created_at DESC 
+             LIMIT $3`,
+            [targetType, targetId, limit]
         );
-        return result.rows[0];
+        return result.rows;
     }
 
-    static async update(id, data) {
-        const fields = [];
-        const values = [];
-        let index = 1;
-        
-        Object.keys(data).forEach(key => {
-            if (key !== 'id' && data[key] !== undefined) {
-                fields.push(`${key} = $${index}`);
-                values.push(data[key]);
-                index++;
-            }
-        });
-        
-        if (fields.length === 0) return null;
-        
-        values.push(id);
-        
-        const query = `
-            UPDATE reports 
-            SET ${fields.join(', ')} 
-            WHERE id = $${index} 
-            RETURNING *
-        `;
-        
-        const result = await pool.query(query, values);
-        return result.rows[0];
+    // Получить логи за период
+    static async getByPeriod(startTime, endTime = Date.now()) {
+        const result = await pool.query(
+            `SELECT * FROM audit_logs 
+             WHERE created_at BETWEEN $1 AND $2 
+             ORDER BY created_at DESC`,
+            [startTime, endTime]
+        );
+        return result.rows;
     }
 
-    static async assignToModerator(reportId, moderatorId) {
-        const result = await pool.query(
-            `UPDATE reports 
-             SET status = 'in_progress', assigned_moderator_id = $1 
-             WHERE id = $2 RETURNING *`,
-            [moderatorId, reportId]
-        );
-        return result.rows[0];
-    }
+    // Получить статистику действий
+    static async getActionStats(period = 7) {
+        const startTime = Date.now() - (period * 24 * 60 * 60 * 1000);
 
-    static async escalate(reportId) {
         const result = await pool.query(
-            `UPDATE reports 
-             SET status = 'escalated', escalation_level = escalation_level + 1 
-             WHERE id = $1 RETURNING *`,
-            [reportId]
+            `SELECT 
+                action,
+                COUNT(*) as count,
+                COUNT(DISTINCT user_id) as unique_users
+             FROM audit_logs
+             WHERE created_at > $1
+             GROUP BY action
+             ORDER BY count DESC`,
+            [startTime]
         );
-        return result.rows[0];
+
+        return result.rows;
     }
 }
 
-module.exports = Report;
+module.exports = AuditLog;

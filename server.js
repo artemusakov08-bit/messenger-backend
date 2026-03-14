@@ -483,6 +483,43 @@ async function initializeDatabase() {
         )
     `);
 
+    // Таблица moderation_actions
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS moderation_actions (
+            id TEXT PRIMARY KEY,
+            target_user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            moderator_id TEXT REFERENCES users(user_id),
+            action_type VARCHAR(50) NOT NULL,
+            reason TEXT,
+            duration BIGINT,
+            created_at BIGINT NOT NULL
+        )
+    `);
+
+    // Таблица audit_logs
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id TEXT PRIMARY KEY,
+            user_id TEXT REFERENCES users(user_id),
+            action VARCHAR(255) NOT NULL,
+            target_type VARCHAR(50),
+            target_id TEXT,
+            details JSONB,
+            ip_address VARCHAR(45),
+            user_agent TEXT,
+            created_at BIGINT NOT NULL
+        )
+    `);
+
+    // Индексы
+    await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_moderation_actions_target ON moderation_actions(target_user_id);
+        CREATE INDEX IF NOT EXISTS idx_moderation_actions_moderator ON moderation_actions(moderator_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
+    `);
+
     // Таблица участников групп
     await db.query(`
         CREATE TABLE IF NOT EXISTS group_members (
