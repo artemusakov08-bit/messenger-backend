@@ -40,6 +40,33 @@ class AuditLog {
         return result.rows;
     }
 
+    static async getPriorityQueue(limit = 50) {
+    const result = await pool.query(
+        `SELECT r.*, 
+                reporter.display_name as reporter_name,
+                reporter.username as reporter_username,
+                reporter.profile_image as reporter_avatar,
+                reported.display_name as reported_name,
+                reported.username as reported_username,
+                reported.profile_image as reported_avatar
+         FROM reports r
+         LEFT JOIN users reporter ON r.reporter_id = reporter.user_id
+         LEFT JOIN users reported ON r.reported_user_id = reported.user_id
+         WHERE r.status = 'pending' OR r.status = 'in_progress'
+         ORDER BY 
+            CASE r.priority
+                WHEN 'critical' THEN 1
+                WHEN 'high' THEN 2
+                WHEN 'medium' THEN 3
+                WHEN 'low' THEN 4
+            END,
+            r.created_at ASC
+         LIMIT $1`,
+        [limit]
+    );
+    return result.rows;
+}
+
     // Получить логи за период
     static async getByPeriod(startTime, endTime = Date.now()) {
         const result = await pool.query(
